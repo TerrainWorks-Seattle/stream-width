@@ -1,0 +1,103 @@
+---
+title: "linear_model"
+output: html_document
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(sf)
+  library(terra)
+  library(tmap)
+  library(data.table)
+  library(patchwork)
+  library(ggplot2)
+})
+
+elev <- rast("streams_clipped/elev_areactest.tif")
+nodes <- read_sf("streams_clipped/nodes_testc.shp")
+cut_blocks <- read_sf("streams_clipped/cut_blocks.shp")
+streams <- read_sf("streams_clipped/streams_clipped.shp")
+```
+
+```{r clean_data}
+
+# Make sure everything is in the same CRS
+# set everything to utm 11N
+cut_blocks <- st_transform(cut_blocks, "EPSG:26911")
+elev <- project(elev, "EPSG:26911")
+st_crs(nodes) <- "EPSG:26911"
+
+nodes[nodes$SurvReach == -9999, ]$SurvReach <- NA
+
+survey_nodes <- nodes[!is.na(nodes$SurvType) & 
+                        nodes$SurvType != "UNKN", ]
+
+
+# # choose one cut block to work with
+# block_id <- "S250922"
+# block <- cut_blocks[cut_blocks$BLOCK_ID == block_id, ]
+# 
+# # trim nodes and streams 
+# nodes <- nodes[block, ]
+# streams_block <- streams[block, ]
+```
+
+In this notebook, I fit an ordinal model to a subset of the data and evaluate some model fit diagnostics. 
+
+Here is what the data looks like: 
+
+```{r map, eval = F}
+
+# tm_shape(cut_blocks) +
+#   tm_lines() +
+#   tm_shape(nodes) + 
+#   tm_dots(size = 0.05) +
+#   tm_shape(streams) + 
+#   tm_lines(col = "RIPARIAN_C", lwd = 2)
+
+```
+
+This is the distribution of all nodes in the network vs the nodes which we have data for. 
+
+Survey nodes skew right. I wonder if this may be because nodes with low contributing area often did not show up as channels (ie width = 0). 
+
+
+```{r}
+ggplot() +
+  geom_density(data=nodes, aes(x = AREA_SQKM, fill = "All"), alpha = 0.4) +
+  geom_density(data=nodes[!is.na(nodes$SurvReach),], aes(x = AREA_SQKM, fill = "Survey"), alpha = 0.4) +
+  scale_x_continuous(trans = "log10") 
+
+```
+
+```{r}
+data <- nodes
+st_geometry(data) <- NULL
+setDT(data)
+
+data <- data[, .(
+  stream_class = factor(SurvType, levels = c("EPH", 
+                                     "INT", 
+                                     "TRANS", 
+                                     "SMPRM", 
+                                     "LGPRM")), 
+  area = AREA_SQKM, 
+  area_log10 = log10(AREA_SQKM), 
+  elev = ELEV_M, 
+  grad20 = GRAD20, 
+  mean_grad = MeanGrad
+)]
+data_md <- data[!is.na(stream_class)]
+
+m1 <- rms::lrm(
+  stream_class ~ area_log10, 
+  data = data_md)
+
+
+
+m1_AC <- rms::lrm(SurvType ~ log10Area, data=data_AC, x=TRUE, y=TRUE, maxit=10000)
+
+m1_all <- rms::lrm(SurvType ~ log10Area, data=data_all, x=TRUE, y=TRUE, maxit=10000))
+```
+
+
