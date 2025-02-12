@@ -1,0 +1,890 @@
+---
+title: "Alberta Channel Classification"
+author: "Dan Miller"
+date: today
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+editor: visual
+editor_options: 
+  chunk_output_type: inline
+bibliography: references.bib
+params:
+  dataPath: "c:/work/data/canfor/"
+  dataSprayLake: "c:/work/data/canfor/spraylake/nodes_lidar.rds"
+  csvSprayLake: "c:/work/data/canfor/spraylake/class_spraylake.csv"
+  dataAreaC: "c:/work/data/canfor/areac/nodes_lidar.rds"
+  csvAreaC: "c:/worrk/data/canfor/areac/class_areac.csv"
+---
+
+```{r}
+#| echo: false
+#| warning: false
+library(ggplot2)
+library(scales)
+library(sf)
+library(terra)
+library(basemaps)
+library(patchwork)
+library(mlr3verse)
+library(data.table)
+library(rms)
+library(Hmisc)
+library(caret)
+library(cutpointr)
+```
+
+The plan: examine both data sets
+
+# Explore the data
+
+We are working with channel survey data from two areas in Alberta, "Area C" and "Spray Lake", shown in the location map below.\
+![Area C and Spray Lake study areas.](images/SiteMap.png){#SiteMap width="4in"}
+
+We have data from field surveys of channels at each study site. The surveyed channels are classified into five types:
+
+1.  Ephemeral (EPH), little or no channel development
+
+2.  Intermittent (INT), $\le$ 0.4 meters width for Area C, $/le$ 0.5 for Spray Lake
+
+3.  Transitional (TRANS), $\gt$ 0.4 to 0.7 meters for Area C, 0.5 to 1.0 for Spray Lake
+
+4.  Small Permanent (SMPRM), $\gt$ 0.7 to 5.0 meters for Area C, 1.0 to 5.0 for Spray Lake
+
+5.  Large Permanent (LGPRM), $\gt$ 5.0 meters for both areas.
+
+We also have lidar-derived DEMs for the two areas, from which synthetic channel networks have been developed. Our goal is find attributes of the basins and their channels inferred from the DEMs that correlate with the surveyed channel type. We can then predict the channel type for channels in the synthetic network that do not have surveys associated with them.
+
+The Area C analysis area covers 5,640 km^2^ with 59,938 km of modeled synthetic channels and 1,142 km of surveyed reaches. The Spray Lake analysis area covers 2,090 km^2^ with 10,122 km of modeled synthetic channels and 1,217 km of surveyed reaches. This is a rather dramatic difference in channel density, from 10.6 km/km^2^ for Area C to 4.8 km/km^2^ for Spray Lake. I am unsure what actual physical difference in channel density this represents. The initiation points for the synthetic network are pushed further upslope than expected channel-head locations because we want it to extend into the "zero-order" portion of the network to include surveyed "ephemeral" channels. Some unknown portion of the total synthetic-network channel length thus extends upslope of physical channels and this portion may differ between the two study sites.
+
+```{r}
+#| echo: FALSE
+# Here is code to generate a site map. I wanted to experiment with R for creating maps, 
+# but when I went to generate a shaded relief map for the study areas, I found 
+# problems with rayshader (DEM is too big). I could try working with terra, but decided 
+# that it would be quicker at this point to just generate maps with a GIS and import 
+# the images. 
+#    file <- paste0(params$dataPath, "areaC/basin_areaC.shp") 
+#    areaC <- sf::st_read(file) 
+#    areaC <- sf::st_transform(areaC, "EPSG:3857") 
+#    file <- paste0(params$dataPath, "SprayLake/basin_SprayLake.shp") 
+#    SprayLake <- sf::st_read(file) 
+#    SprayLake <- sf::st_transform(SprayLake, "EPSG:3857") 
+#    Alberta <- sf::st_read(paste0(params$dataPath, "Alberta.shp")) 
+#    Alberta <- sf::st_transform(Alberta, "EPSG:3857") 
+#    box <- sf::st_buffer(Alberta,dist=50000) 
+#    set_defaults(map_service = "osm", map_type = "topographic") 
+#    ggplot() +  
+#      basemap_gglayer(box) + 
+#      scale_fill_identity() + 
+#      geom_sf(data=Alberta, color="black", linewidth=1.0,fill="transparent") + 
+#      geom_sf(data=areaC, color="black",linewidth=0.7,fill="transparent") + 
+#      geom_sf(data=SprayLake, color="black", linewidth=0.7, fill="transparent") + 
+#      coord_sf(expand=FALSE) +  
+#      xlab("Longitude") + ylab("Latitude") + 
+#      annotate(geom = "text", x=-12800000, y=8350000, label = "Alberta", size=4) + 
+#      annotate(geom="text",x=-12980000,y=7380000,label="Area C", size=3) + 
+#      annotate(geom="text",x=-12500000,y=6450000,label="Spray Lake", size=3) + 
+#      annotate(geom="text",x=-13300000,y=8580000,label="Study Areas", size=5) 
+```
+
+![Area C survey reaches and synthetic network.](images/AreaC.png){#AreaC}
+
+![Spray Lake survey reaches and synthetic network.](images/SprayLake.png){#SprayLake}
+
+Terrain at the two study sites is quite different. Area C lies mostly east of the mountain foothills on relatively low-gradient terrain heavily influenced by continental glaciation, where as the Spray Lake site lies on more rugged terrain with primary structural control. As we will see, these differences are well reflected in characteristics of the two channel networks. Additionally, the channel surveys differ between the two sites. Those at Area C focused primarily on smaller channels with few permanent-flow channels surveyed, whereas at Spray Lake, almost all the channels with permanent flow were surveyed.
+
+## Frequency distributions for AreaC and Spray Lake
+
+```{r}
+#| label: Get_Data
+#| code-fold: true
+#| echo: FALSE
+# nodes holds the entire network
+
+datafile <- params$dataAreaC
+if (!file.exists(datafile)) {
+  file <- params$csvAreaC
+  nodes_AC <- data.table::fread(file)
+  nodes_AC <- nodes_AC[GRAD20 >= 0. & LP_1500 >= 0. & AREA_SQKM > 0.]
+  saveRDS(nodes_AC, datafile)
+} else {
+  nodes_AC <- readRDS(datafile)
+}
+
+# survey holds only the survey reaches with a channel-type class
+survey_AC <- nodes_AC[SurvType == "EPH" | SurvType == "INT" | SurvType == "TRANS" | SurvType == "SMPRM" | SurvType == "LGPRM"]
+survey_AC$SurvType <- factor(survey_AC$SurvType, levels = c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+
+datafile <- params$dataSprayLake
+if (!file.exists(datafile)) {
+  file <- params$csvSprayLake
+  nodes_SL <- data.table::fread(file)
+  nodes_SL <- nodes_SL[GRAD20 >= 0. & LP_1500 >= 0. & AREA_SQKM > 0.]
+  saveRDS(nodes_SL, datafile)
+} else {
+  nodes_SL <- readRDS(datafile)
+}
+
+# survey holds only the survey reaches with a channel-type class
+survey_SL <- nodes_SL[SurvType == "EPH" | SurvType == "INT" | SurvType == "TRANS" | SurvType == "SMPRM" | SurvType == "LGPRM"]
+survey_SL$SurvType <- factor(survey_SL$SurvType, levels = c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+```
+
+We seek combinations of channel and terrain attributes that can be measured or inferred from the DEM that differ between the five surveyed channel types. It is informative to start by looking at how the range of characteristics that exist across the channel network are represented in the sample of that network contained in the survey reaches. The density plots in @fig-area-dist show how the proportion of channel length varies as a function of contributing area, which serves as a measure of channel size, for both the entire channel network and for the surveyed reaches in the two study areas.
+
+```{r}
+#| label: fig-area-dist
+#| fig-cap: "Cumulative distributions for contributing area by proportion of channel length for all channels and for surveyed reaches only"
+
+p1 <- ggplot() +
+  geom_density(data=nodes_AC, aes(x = AREA_SQKM, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_AC, aes(x = AREA_SQKM, fill = "Survey"), alpha = 0.4) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  coord_cartesian(xlim = c(0.001, 1000.), ylim = c(0., 1.1)) + 
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Area C",
+       subtitle = "Area under curves sum to one",
+       x = "Contributing Area (sq km)",
+       y = "Density") +
+  theme(legend.position = c(.8, 0.93))
+
+p2 <- ggplot() +
+  geom_density(data=nodes_SL, aes(x = AREA_SQKM, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_SL, aes(x = AREA_SQKM, fill = "Survey"), alpha = 0.4) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  coord_cartesian(xlim = c(0.001, 1000.), ylim = c(0.,1.1)) + 
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Spray Lake",
+       subtitle = "Area under curves sum to one",
+       x = "Contributing Area (sq km)",
+       y = "Density") +
+  theme(legend.position = c(.8, 0.93))
+
+p1 + p2
+```
+
+In these plots, the proportions shown in blue are measured relative to all channels in the network and those shown in red relative to the total length of surveyed reaches. The shape of the curves for the entire network is similar for the two sites: both are highly right skewed (note the logarithmic x axis). Area C has a higher proportion of very small synthetic channels (\< .003 km^2^) than Spray Lake, which explains in part the higher modeled drainage density there. Ideally, for a model to characterize the entire channel network, we would like a surveyed sample with similar proportions across the range of channel sizes. The surveys are concentrated on channels over the range of about 0.005 km^2^ to 1.0 km^2^,
+
+This is illustrated more directly in @fig-density-by-count below. The left panels show density plots by total channel-node counts for the synthetic network and surveyed reaches; the right panels show what proportion of the network channel length is included within the surveys as a function of contributing area. Note the dramatic difference in the y scales on the right panels between the two study areas.
+
+```{r}
+#| label: fig-density-by-count
+#| fig-cap: "Node-count density by contributing area for the entire network and surveyed reaches"
+#| fig-height: 8 
+
+p1 <- ggplot() +
+  geom_density(data=nodes_AC, aes(x = AREA_SQKM, y = after_stat(count), fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_AC, aes(x = AREA_SQKM, y = after_stat(count), fill = "Survey"), alpha = 0.4) +
+  coord_cartesian(xlim = c(0.001, 1000.)) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node-count density, Area C",
+       x = "Contributing Area (sq km)",
+       y = "Number of channel nodes") +
+  scale_x_continuous(trans = "log10", 
+                     labels = label_number()) +
+  theme(legend.position = c(.8, 0.95))
+
+n <- nodes_AC[, log10(AREA_SQKM)]
+s <- survey_AC[, log10(AREA_SQKM)]
+
+n <- nodes_AC[, .(AREA_SQKM, SurvReach)]
+nlong <- melt(n, id.vars = "AREA_SQKM",
+                  measure.vars = "SurvReach")
+nlong <- nlong[, value := as.factor(fifelse(value == -9999,0,1))]
+setkey(nlong,AREA_SQKM)
+
+p2 <- ggplot(data=nlong, aes(x=AREA_SQKM, y = after_stat(count), fill = value)) + 
+  geom_density(position="fill", alpha = 0.5, show.legend = FALSE) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  scale_fill_manual(name = NULL,
+                    values = c("0" = "lightgrey", "1" = "red"),
+                    labels = c("0" = "Not Surveyed", "1" = "Survey Reaches")) +
+  coord_cartesian(xlim = c(0.001, 1000.), ylim = c(0.0, 0.03)) +
+  labs(title = "Proportion of network channels\nin survey reaches",
+       x = "Contributing Area (sq km)",
+       y = "Proportion of channel length")
+
+p3 <- ggplot() +
+  geom_density(data=nodes_SL, aes(x = AREA_SQKM, y = after_stat(count), fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_SL, aes(x = AREA_SQKM, y = after_stat(count), fill = "Survey"), alpha = 0.4) +
+  coord_cartesian(xlim = c(0.001, 1000.)) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node-count density, Spray Lake",
+       x = "Contributing Area (sq km)",
+       y = "Number of channel nodes") +
+  scale_x_continuous(trans = "log10", 
+                     labels = label_number()) +
+  theme(legend.position = c(.8, 0.95))
+
+n <- nodes_SL[, log10(AREA_SQKM)]
+s <- survey_SL[, log10(AREA_SQKM)]
+
+n <- nodes_SL[, .(AREA_SQKM, SurvReach)]
+nlong <- melt(n, id.vars = "AREA_SQKM",
+                  measure.vars = "SurvReach")
+nlong <- nlong[, value := as.factor(fifelse(value == -9999,0,1))]
+setkey(nlong,AREA_SQKM)
+
+p4 <- ggplot(data=nlong, aes(x=AREA_SQKM, y = after_stat(count), fill = value)) + 
+  geom_density(position="fill", alpha = 0.5, show.legend = FALSE) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  scale_fill_manual(name = NULL,
+                    values = c("0" = "lightgrey", "1" = "red"),
+                    labels = c("0" = "Not Surveyed", "1" = "Survey Reaches")) +
+  coord_cartesian(xlim = c(0.001, 1000.), ylim = c(0., 0.03)) +
+  labs(title = "Proportion of network channels\nin survey reaches",
+       x = "Contributing Area (sq km)",
+       y = "Proportion of channel length")
+
+(p1 + p2) / (p3 + p4) + 
+  plot_layout(heights = unit(c(3,3), c('in','in')))
+```
+
+Ideally, our survey sample would include the same proportion of channel length across the entire range of contributing areas. At Area C we have a more complete sample of channels in the 0.01 to 1.0 km\^2 range; in Spray Lake we have a nearly complete sample of channels in the 100 km\^2 range. These different biases in the two samples might translate to different biases in our ability to sample other physical characteristics of the channels. We will examine this in more detail when we look at how the proportion of surveyed channel types varies across the range of contributing areas.
+
+First, though, let's look at some other terrain attributes across these networks. @fig-landscape-position below shows the distribution of "landscape position" values of the channels. Landscape position indicates vertical location relative to the valley floor, with a value of zero, and ridge tops, with a value of 1.0. Here landscape position was defined as $(z-zmin)/(zmax-zmin)$, where $z$ is elevation of a channel node, $zmax$ is the maximum elevation within a radius of 1500 meters, and $zmin$ is the minimum elevation within a radius of 1500 meters.
+
+```{r}
+#| label: fig-landscape-position
+#| fig-cap: "Frequency distributions by channel length for landscape position. Landscape positions is calculated as (z-zmin)/(zmax-zmin), where z = elevation with zmax and zmin determined over a 1500-m radius."
+
+p1 <- ggplot() +
+  geom_density(data=nodes_AC, aes(x = LP_1500, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_AC, aes(x = LP_1500, fill = "Survey"), alpha = 0.4) +
+  coord_cartesian(ylim = c(0., 3.5)) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Area C",
+       subtitle = "Area under curves sum to one",
+       x = "Landscape Position",
+       y = "Density") +
+  theme(legend.position = c(.8, 0.93))
+
+p2 <- ggplot() +
+  geom_density(data=nodes_SL, aes(x = LP_1500, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_SL, aes(x = LP_1500, fill = "Survey"), alpha = 0.4) +
+  coord_cartesian(ylim = c(0., 3.5)) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Spray Lake",
+       subtitle = "Area under curves sum to one",
+       x = "Landscape Position",
+       y = "Density") +
+  theme(legend.position = c(.8, 0.93))
+p1 + p2
+```
+
+In Area C, the surveys tend to undersample the valley floors (landscape position near zero); in Spray Lake, the surveys tend to undersample the channels higher up the valley sides. This in part reflects the different topographies: Area C has broad upland areas with larger landscape-position values, Spray Lake has sharper ridges so less area with large landscape-position values.
+
+@fig-dist-gradient below examines the distribution of channel gradients.
+
+```{r}
+#| label: fig-dist-gradient
+#| fig-cap: "Frequency distributions of channel gradient for all channels and for survey reaches. Gradient measured over a 20-m radius."
+p1 <- ggplot() +
+  geom_density(data=nodes_AC, aes(x = GRAD20, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_AC, aes(x = GRAD20, fill = "Survey"), alpha = 0.4) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Area C",
+       subtitle = "Area under curves sum to one",
+       x = "Gradient",
+       y = "Density") +
+  theme(legend.position = c(.6, 0.93)) +
+  coord_cartesian(xlim = c(0.0, 0.7), ylim = c(0.,15.))
+
+p2 <- ggplot() +
+  geom_density(data=nodes_SL, aes(x = GRAD20, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_SL, aes(x = GRAD20, fill = "Survey"), alpha = 0.4) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Spray Lake",
+       subtitle = "Area under curves sum to one",
+       x = "Gradient",
+       y = "Density") +
+  theme(legend.position = c(.6, 0.93)) +
+  coord_cartesian(xlim = c(0.0, 0.7), ylim = c(0.,15.))
+
+p1 + p2 + plot_annotation(title = "Channel Gradient")
+```
+
+Spray Lake has more steep channels. The surveys at Area C undersample the lowest-gradient channels where as at Spray Lake, the surveys tend to undersample the steeper channels.
+
+```{r}
+#| label: fig-mean-gradient
+#| fig-cap: "Frequency distributions of mean contributing-area gradient. Gradient measured over a 30-m radius."
+p1 <- ggplot() +
+  geom_density(data=nodes_AC, aes(x = MeanGrad, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_AC, aes(x = MeanGrad, fill = "Survey"), alpha = 0.4) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Area C",
+       subtitle = "Area under curves sum to one",
+       x = "Mean Gradient of Contributing Area",
+       y = "Density") +
+  theme(legend.position = c(.6, 0.93)) +
+  coord_cartesian(xlim = c(0.0, 0.7), ylim = c(0., 9.0))
+
+p2 <- ggplot() +
+  geom_density(data=nodes_SL, aes(x = MeanGrad, fill = "All"), alpha = 0.4) +
+  geom_density(data=survey_SL, aes(x = MeanGrad, fill = "Survey"), alpha = 0.4) +
+  scale_fill_manual(name = NULL,
+                    values = c(All = "blue", Survey = "red"),
+                    labels = c(All = "Entire Network", Survey = "Survey Reaches"),
+                    limits = c("All", "Survey")) +
+  labs(title = "Node density, Spray Lake",
+       subtitle = "Area under curves sum to one",
+       x = "Mean Gradient of Contributing Area",
+       y = "Density") +
+  theme(legend.position = c(.2, 0.93)) +
+  coord_cartesian(xlim = c(0.0, 0.7), ylim = c(0., 9.0))
+
+p1 + p2 + plot_annotation(title = "Mean gradient of the contributing area")
+```
+
+Area C has overall lower gradients across the basin than Spray Lake. In both areas, the surveys seem to be sampling across the range of contributing-area gradient.
+
+Recall, our goal is to determine how the five channel classes are distributed across the channel network. A starting point might be to determine what proportion of the total network length is in each channel class. @fig-num-nodes shows the proportion of total surveyed channel length at each area in each of the five classes.
+
+```{r}
+#| label: fig-num-nodes
+#| fig-cap: "Number of channel nodes in each survey-reach class."
+p1 <- ggplot(data=survey_AC) + 
+  geom_bar(aes(x=SurvType, y=after_stat(count/sum(count))),
+           fill = "blue", color = "black", alpha = 0.3) + 
+  labs(title="Area C", x="Channel Class") +
+  coord_cartesian(ylim = c(0, 0.9))
+
+p2 <- ggplot(data=survey_SL) + 
+  geom_bar(aes(x=SurvType, y=after_stat(count/sum(count))),
+           fill = "blue", color = "black", alpha = 0.3) + 
+  labs(title="Spray Lake", x="Channel Class") + 
+  coord_cartesian(ylim = c(0, 0.9))
+
+p1 + p2 + plot_annotation(title="Proportion of surveyed channel length in each class")
+```
+
+Given that we know the surveys have not sampled the network proportionally to channel size, as measured by contributing area, we suspect that these do not reflect the proportion of the entire network in each class; that is, our sample is probably not balanced in that it is not representative of the distribution of channel types across the network. We do not know what the distribution is across the network, but must somehow infer that from our sample.
+
+In the following figures, we examine the distribution of channel and basin attributes across channel type for the two study areas. @fig-mean-annual-precip below shows box plots for mean annual precipitation depth over the contributing area for each channel type. Mean annual precipitation is based on spatially distributed 30-year normals spanning 1961-1990 from the [PRISM](https://prism.oregonstate.edu/projects/canw.php) model.
+
+```{r}
+#| label: fig-mean-annual-precip
+#| fig-cap: "Mean annual precipitation (m), PRISM 30-yr normals"
+p1 = ggplot(data = survey_AC, aes(x = SurvType, y = MNANPRC_M, fill = SurvType)) +
+  geom_boxplot(show.legend=FALSE) +
+  coord_cartesian(ylim = c(0.5, 1.0)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                               labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Area C", x = "Channel Type", y = "Mean annual precipitation (m)")
+
+p2 = ggplot(data = survey_SL, aes(x = SurvType, y = MNANPRC_M, fill = SurvType)) +
+  geom_boxplot(show.legend=FALSE) +
+  coord_cartesian(ylim = c(0.5, 1.0)) + 
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                               labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Mean annual precipitation (m) based on PRISM 30-yr normals (1991-2001)")
+```
+
+```{r}
+#| label: fig-box-area
+#| fig-cap: "Box plots of contributing area for all channel nodes in each surveyed reach type."
+p1 = ggplot(data = survey_AC, aes(x = SurvType, y = AREA_SQKM, fill = SurvType)) +
+  geom_boxplot(show.legend=FALSE) +
+  coord_cartesian(ylim = c(0.001, 1000.)) +  
+  scale_y_continuous(trans = "log10", labels = label_number()) +  
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Area C", x = "Channel Type", y = "Area (sq km)")
+
+p2 = ggplot(data = survey_SL, aes(x = SurvType, y = AREA_SQKM, fill = SurvType)) +
+  geom_boxplot(show.legend=FALSE) +
+  coord_cartesian(ylim = c(0.001, 1000.)) +  
+  scale_y_continuous(trans = "log10", labels = label_number()) +  
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent')) +
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Contributing area (sq km) by channel class")
+```
+
+```{r}
+survey_AC <- survey_AC[, vol := AREA_SQKM*MNANPRC_M]
+survey_SL <- survey_SL[, vol := AREA_SQKM*MNANPRC_M]
+
+p1 = ggplot(data = survey_AC, aes(x = SurvType, y = vol, fill = SurvType)) +
+  geom_boxplot(show.legend=FALSE) +
+  coord_cartesian(ylim = c(0.001, 1000.)) +  
+  scale_y_continuous(trans = "log10", labels = label_number()) +  
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                               labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Area C", x = "Channel Type", y = "Area*Precip")
+
+p2 = ggplot(data = survey_SL, aes(x = SurvType, y = vol, fill = SurvType)) +
+  geom_boxplot(show.legend=FALSE) +
+  coord_cartesian(ylim = c(0.001, 1000.)) +  
+  scale_y_continuous(trans = "log10", labels = label_number()) +  
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                               labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Contributing area * mean annual precipitation")
+```
+
+```{r}
+#| label: fig-proportions
+#| fig-cap: "Proportion of surveyed channel length in each reach class by contributing area."
+s <- survey_AC[, .(AREA_SQKM, SurvType)]
+s$SurvType <- factor(s$SurvType, levels = c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+slong <- melt(s, id.vars = "AREA_SQKM", measure.vars = "SurvType")
+# Rename the channel types so they plot in correct alphabetical order
+slong <- slong[, value := fifelse(value == "EPH", "A_EPH",fifelse(value == "INT", "B_INT", fifelse(value == "TRANS", "C_TRANS", fifelse(value == "SMPRM", "D_SMPRM", "E_LGPRM"))))]
+setkey(slong,AREA_SQKM)
+
+p1 <- ggplot(data=slong, aes(x=AREA_SQKM, y = after_stat(count), fill = value)) + 
+  geom_density(position="fill", alpha = 0.5) +
+  coord_cartesian(xlim = c(0.001, 1000.)) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  scale_fill_manual(name = NULL,
+                    values = c("A_EPH" = "red", "B_INT" = "green", "C_TRANS" = "purple", "D_SMPRM" = "lightblue", "E_LGPRM" = "darkblue"),
+                    labels = c("A_EPH" = "Ephemeral", "B_INT" = "Intermittent", "C_TRANS" = "Transitional", "D_SMPRM" = "Small Permanent", "E_LGPRM" = "Large Permanent"),
+                    limits = c("A_EPH", "B_INT", "C_TRANS", "D_SMPRM", "E_LGPRM")) +
+  labs(title = "Area C",
+       y = "Proportion of channel length") +
+  theme(legend.title = element_blank(),
+        legend.key = element_rect(fill = "white"), 
+        legend.background = element_rect(fill = "transparent"),
+        legend.position = c(.13, .68),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank())
+
+s <- survey_SL[, .(AREA_SQKM, SurvType)]
+s$SurvType <- factor(s$SurvType, levels = c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+slong <- melt(s, id.vars = "AREA_SQKM", measure.vars = "SurvType")
+# Rename the channel types so they plot in correct alphabetical order
+slong <- slong[, value := fifelse(value == "EPH", "A_EPH",fifelse(value == "INT", "B_INT", fifelse(value == "TRANS", "C_TRANS", fifelse(value == "SMPRM", "D_SMPRM", "E_LGPRM"))))]
+setkey(slong,AREA_SQKM)
+
+p2 <- ggplot(data=slong, aes(x=AREA_SQKM, y = after_stat(count), fill = value)) + 
+  geom_density(position="fill", alpha = 0.5, show.legend=FALSE) +
+  coord_cartesian(xlim = c(0.001, 1000.)) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  scale_fill_manual(name = NULL,
+                    values = c("A_EPH" = "red", "B_INT" = "green", "C_TRANS" = "purple", "D_SMPRM" = "lightblue", "E_LGPRM" = "darkblue"),
+                    labels = c("A_EPH" = "Ephemeral", "B_INT" = "Intermittent", "C_TRANS" = "Transitional", "D_SMPRM" = "Small Permanent", "E_LGPRM" = "Large Permanent"),
+                    limits = c("A_EPH", "B_INT", "C_TRANS", "D_SMPRM", "E_LGPRM")) +
+  labs(title = "Spray Lake",
+       x = "Contributing Area (sq km)",
+       y = "Proportion of channel length") 
+
+(p1 / p2) + plot_annotation(title="Proportion of survey reaches in each channel class as a function of contributing area")
+```
+
+```{r}
+#| label: combined
+survey_all <- rbindlist(list(survey_AC, survey_SL))
+survey_all <- survey_all[!AREA_SQKM > 100.,]
+
+s <- survey_all[, .(AREA_SQKM, SurvType)]
+s$SurvType <- factor(s$SurvType, levels = c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+slong <- melt(s, id.vars = "AREA_SQKM", measure.vars = "SurvType")
+# Rename the channel types so they plot in correct alphabetical order
+slong <- slong[, value := fifelse(value == "EPH", "A_EPH",fifelse(value == "INT", "B_INT", fifelse(value == "TRANS", "C_TRANS", fifelse(value == "SMPRM", "D_SMPRM", "E_LGPRM"))))]
+setkey(slong,AREA_SQKM)
+
+p1 <- ggplot(data=slong, aes(x=AREA_SQKM, y = after_stat(count), fill = value)) + 
+  geom_density(position="fill", alpha = 0.5) +
+  coord_cartesian(xlim = c(0.001, 100.)) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  scale_fill_manual(name = NULL,
+                    values = c("A_EPH" = "red", "B_INT" = "green", "C_TRANS" = "purple", "D_SMPRM" = "lightblue", "E_LGPRM" = "darkblue"),
+                    labels = c("A_EPH" = "Ephemeral", "B_INT" = "Intermittent", "C_TRANS" = "Transitional", "D_SMPRM" = "Small Permanent", "E_LGPRM" = "Large Permanent"),
+                    limits = c("A_EPH", "B_INT", "C_TRANS", "D_SMPRM", "E_LGPRM")) +
+  labs(title = "Combined data sets",
+       y = "Proportion of channel length") +
+  theme(legend.title = element_blank(),
+        legend.key = element_rect(fill = "white"), 
+        legend.background = element_rect(fill = "transparent"),
+        legend.position = c(.13, .68))
+
+p1
+```
+
+```{r}
+#| label: fig-survey-LP
+#| fig-cap: "Landscape position for all channel nodes by survey-reach class"
+p1 = ggplot(data = survey_AC, aes(x = SurvType, y = LP_1500, fill = SurvType), show.legend) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0.0, 1.)) +  
+  labs(title = "Area C",
+       x = "Channel Type", 
+       y = "Landscape Position")
+
+p2 = ggplot(data = survey_SL, aes(x = SurvType, y = LP_1500, fill = SurvType), show.legend) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0.0, 1.)) +  
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Landscape position by channel class")
+```
+
+```{r}
+p1 <- ggplot(data = survey_AC, aes(x = SurvType, y = INCISE10, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 5.)) +
+  scale_fill_discrete(breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Area C", x = "Channel Type", y = "Incision depth (m)") 
+
+p2 <- ggplot(data = survey_SL, aes(x = SurvType, y = INCISE10, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 5.)) +
+  scale_fill_discrete(breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Incision depth (m)")
+```
+
+```{r}
+p1 <- ggplot(data = survey_AC, aes(x = SurvType, y = GRAD20, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 0.8)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Area C", x = "Channel Type", y = "Channel Gradient")
+
+p2 <- ggplot(data = survey_SL, aes(x = SurvType, y = GRAD20, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 0.8)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Channel gradient")
+```
+
+```{r}
+p1 <- ggplot(data = survey_AC, aes(x = SurvType, y = MeanGrad, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 0.8)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Area C", x = "Channel Type", y = "Mean Contributing-Area Gradient")
+
+p2 <- ggplot(data = survey_SL, aes(x = SurvType, y = MeanGrad, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 0.8)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(title = "Spray Lake", x = "Channel Type") +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+
+p1 + p2 + plot_annotation(title="Mean gradient over the contributing area")
+```
+
+```{r}
+p1 <- ggplot(data = survey_AC, aes(x = SurvType, y = DEV10, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 8)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(x = "Channel Type", y = "DEV")
+
+p2 <- ggplot(data = survey_SL, aes(x = SurvType, y = DEV10, fill = SurvType)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_cartesian(ylim = c(0., 8)) +
+  scale_fill_discrete("Channel Type",
+                      breaks = c('EPH', 'INT', 'TRANS', 'SMPRM', 'LGPRM'),
+                      labels = c('Ephemeral', 'Intermittent', 'Transitional','Small Permanent', 'Large Permanent')) +
+  labs(x = "Channel Type", y = "DEV")
+
+p1 + p2
+```
+
+```{r}
+#| label: clip
+
+AC_clipped <- survey_AC[AREA_SQKM <= 100.,]
+SL_clipped <- survey_SL[AREA_SQKM <= 100.,]
+all_clipped <- survey_all[AREA_SQKM <= 100.,]
+
+survey_all <- rbindlist(list(survey_AC, survey_SL))
+
+s <- all_clipped[, .(AREA_SQKM, SurvType)]
+s$SurvType <- factor(s$SurvType, levels = c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+slong <- melt(s, id.vars = "AREA_SQKM", measure.vars = "SurvType")
+# Rename the channel types so they plot in correct alphabetical order
+slong <- slong[, value := fifelse(value == "EPH", "A_EPH",fifelse(value == "INT", "B_INT", fifelse(value == "TRANS", "C_TRANS", fifelse(value == "SMPRM", "D_SMPRM", "E_LGPRM"))))]
+setkey(slong,AREA_SQKM)
+
+p1 <- ggplot(data=slong, aes(x=AREA_SQKM, y = after_stat(count), fill = value)) + 
+  geom_density(position="fill", alpha = 0.5) +
+  coord_cartesian(xlim = c(0.001, 100.)) +
+  scale_x_continuous(trans = "log10", labels = label_number()) +
+  scale_fill_manual(name = NULL,
+                    values = c("A_EPH" = "red", "B_INT" = "green", "C_TRANS" = "purple", "D_SMPRM" = "lightblue", "E_LGPRM" = "darkblue"),
+                    labels = c("A_EPH" = "Ephemeral", "B_INT" = "Intermittent", "C_TRANS" = "Transitional", "D_SMPRM" = "Small Permanent", "E_LGPRM" = "Large Permanent"),
+                    limits = c("A_EPH", "B_INT", "C_TRANS", "D_SMPRM", "E_LGPRM")) +
+  labs(title = "Combined data, cliped at 100 sq km",
+       y = "Proportion of channel length") +
+  theme(legend.title = element_blank(),
+        legend.key = element_rect(fill = "white"), 
+        legend.background = element_rect(fill = "transparent"),
+        legend.position = c(.13, .68))
+
+p1
+```
+
+```{r}
+data_AC <- AC_clipped[, .(SurvType, AREA_SQKM, ELEV_M, GRAD20, LP_1500, INCISE10, DIF10, DEV10, PLAN10, MeanGrad)]
+data_AC <- data_AC[, log10Area := log10(AREA_SQKM)]
+
+data_SL <- SL_clipped[, .(SurvType, AREA_SQKM, ELEV_M, GRAD20, LP_1500, INCISE10, DIF10, DEV10, PLAN10, MeanGrad)]
+data_SL <- data_SL[, log10Area := log10(AREA_SQKM)]
+
+data_all <- all_clipped[, .(SurvType, AREA_SQKM, ELEV_M, GRAD20, LP_1500, INCISE10, DIF10, DEV10, PLAN10, MeanGrad)]
+data_all <- data_all[, log10Area := log10(AREA_SQKM)]
+
+m1_AC <- rms::lrm(SurvType ~ log10Area, data=data_AC, x=TRUE, y=TRUE, maxit=10000)
+
+m1_all <- rms::lrm(SurvType ~ log10Area, data=data_all, x=TRUE, y=TRUE, maxit=10000)
+
+```
+
+```{r}
+# Translate the survey data to a 5-level factor 
+d_class_AC <- data_AC[, class := fifelse(SurvType == "EPH", 1, fifelse(SurvType == "INT", 2, fifelse(SurvType == "TRANS", 3, fifelse(SurvType == "SMPRM", 4, 5))))]
+d_class_AC <- d_class_AC[,class] %>% factor(levels = c(1,2,3,4,5))
+
+p_m1_AC <- as.data.table(predict(m1_AC, type = "fitted.ind"))
+m1_AC_class <- p_m1_AC[,max.col(.SD,ties.method="first")]
+
+m1_AC_class <- factor(m1_AC_class, levels = c(1,2,3,4,5))
+```
+
+```{r}
+cm1_AC <- confusionMatrix(m1_AC_class,d_class_AC)
+tm1 <- as.data.table(cm1_AC$table)
+n1 <- tm1[Reference==1, sum(N)]
+n2 <- tm1[Reference==2, sum(N)]
+n3 <- tm1[Reference==3, sum(N)]
+n4 <- tm1[Reference==4, sum(N)]
+n5 <- tm1[Reference==5, sum(N)]
+tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
+```
+
+| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
+|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
+| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
+| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
+| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+
+: Confusion matrix by proportion of each class, model 1 (Area).
+
+```{r}
+d_class_all <- data_all[, class := fifelse(SurvType == "EPH", 1, fifelse(SurvType == "INT", 2, fifelse(SurvType == "TRANS", 3, fifelse(SurvType == "SMPRM", 4, 5))))]
+d_class_all <- d_class_all[,class] %>% factor(levels = c(1,2,3,4,5))
+
+p_m1_all <- as.data.table(predict(m1_all, type = "fitted.ind"))
+m1_all_class <- p_m1_all[,max.col(.SD,ties.method="first")]
+
+m1_all_class <- factor(m1_all_class, levels = c(1,2,3,4,5))
+```
+
+```{r}
+cm1_all <- confusionMatrix(m1_all_class,d_class_all)
+tm1 <- as.data.table(cm1_all$table)
+n1 <- tm1[Reference==1, sum(N)]
+n2 <- tm1[Reference==2, sum(N)]
+n3 <- tm1[Reference==3, sum(N)]
+n4 <- tm1[Reference==4, sum(N)]
+n5 <- tm1[Reference==5, sum(N)]
+tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
+```
+
+| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
+|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
+| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
+| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
+| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+
+: Confusion matrix by proportion of each class, model 1 (Area).
+
+```{r}
+# Separate data to EPH and all others.
+setnames(p_m1_AC, c("EPH", "INT", "TRANS", "SMPRM", "LGPRM"))
+p_m1_AC <- p_m1_AC[, psum1 := EPH]
+p_m1_AC <- p_m1_AC[, psum2 := psum1 + INT]
+p_m1_AC <- p_m1_AC[, psum3 := psum2 + TRANS]
+p_m1_AC <- p_m1_AC[, psum4 := psum3 + SMPRM]
+
+# Get cut points
+eph <- data_AC[, iclass := fifelse(SurvType == "EPH", 1 , 0)]
+eph <- eph[, .(iclass)]
+eph <- eph[, p := p_m1_AC[,psum1]]
+cut1 <- cutpointr(eph,p,iclass,method = maximize_metric, metric=accuracy, pos_class= 1, direction = ">=")
+c1 <- cut1$optimal_cutpoint
+
+int <- data_AC[, iclass := fifelse(SurvType == "EPH", 1, 
+                                  fifelse(SurvType == "INT", 1, 0))]
+int <- int[, .(iclass)]
+int <- int[, p := p_m1_AC[, psum2]]
+cut2 <- cutpointr(int,p,iclass,method = maximize_metric,metric=accuracy,pos_class=1,direction = ">=")
+c2 <- cut2$optimal_cutpoint
+
+trans <- data_AC[, iclass := fifelse(SurvType == "EPH", 1,
+                                      fifelse(SurvType == "INT", 1,
+                                              fifelse(SurvType == "TRANS", 1, 0)))]
+trans <- trans[, .(iclass)]
+trans <- trans[, p := p_m1_AC[, psum3]]
+cut3 <- cutpointr(trans,p,iclass,method=maximize_metric,metric=accuracy,pos_class=1,direction=">=")
+c3 <- cut3$optimal_cutpoint
+
+smprm <- data_AC[, iclass := fifelse(SurvType == "EPH", 1,
+                                      fifelse(SurvType == "INT", 1,
+                                              fifelse(SurvType == "TRANS", 1, 
+                                                      fifelse(SurvType == "SMPRM", 1, 0))))]
+smprm <- smprm[, .(iclass)]
+smprm <- smprm[, p := p_m1_AC[, psum4]]
+cut4 <- cutpointr(smprm,p,iclass,method=maximize_metric,metric=accuracy,pos_class=1,direction=">=")
+c4 <- cut4$optimal_cutpoint
+```
+
+Here are the cut points found for model 1:
+
+| Transition                         | Probability |
+|------------------------------------|-------------|
+| Ephemeral to Intermittent          | `r c1`      |
+| Intermittent to Transitional       | `r c2`      |
+| Transitional to Small Permanent    | `r c3`      |
+| Small Permanent to Large Permanent | `r c4`      |
+
+: Probability cut points for channel-class transitions, model 1.
+
+Here is the confusion matrix:
+
+```{r}
+p_m1_AC <- p_m1_AC[, p1 := EPH]
+p_m1_AC <- p_m1_AC[, p2 := EPH + INT]
+p_m1_AC <- p_m1_AC[, p3 := EPH + INT + TRANS]
+p_m1_AC <- p_m1_AC[, p4 := EPH + INT + TRANS + SMPRM]
+p_1 <- p_m1_AC[, class := ifelse(p1 >= c1, 1,
+                               ifelse(p2 >= c2, 2,
+                                      ifelse(p3 >= c3, 3,
+                                             ifelse(p4 >= c4, 4, 5))))]
+
+p_1 <- factor(p_m1_AC$class, levels = c(1,2,3,4,5))
+
+cm1cut <- confusionMatrix(p_1,d_class_AC)
+tm1 <- as.data.table(cm1cut$table)
+n1 <- tm1[Reference==1, sum(N)]
+n2 <- tm1[Reference==2, sum(N)]
+n3 <- tm1[Reference==3, sum(N)]
+n4 <- tm1[Reference==4, sum(N)]
+n5 <- tm1[Reference==5, sum(N)]
+tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
+```
+
+| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
+|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
+| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
+| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
+| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+
+: Confusion matrix by proportion of each class, model 1 using cut points.
+
+```{r}
+d_class_SL <- data_SL[, class := fifelse(SurvType == "EPH", 1, fifelse(SurvType == "INT", 2, fifelse(SurvType == "TRANS", 3, fifelse(SurvType == "SMPRM", 4, 5))))]
+d_class_SL <- d_class_SL[,class] %>% factor(levels = c(1,2,3,4,5))
+
+p_m1_predSL <- as.data.table(predict(newdata = data_SL, m1_AC, type = "fitted.ind"))
+m1_predSL_class <- p_m1_predSL[,max.col(.SD,ties.method="first")]
+
+m1_predSL_class <- factor(m1_predSL_class, levels = c(1,2,3,4,5))
+```
+
+```{r}
+cm1_predSL <- confusionMatrix(m1_predSL_class,d_class_SL)
+tm1 <- as.data.table(cm1_predSL$table)
+n1 <- tm1[Reference==1, sum(N)]
+n2 <- tm1[Reference==2, sum(N)]
+n3 <- tm1[Reference==3, sum(N)]
+n4 <- tm1[Reference==4, sum(N)]
+n5 <- tm1[Reference==5, sum(N)]
+tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
+```
+
+| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
+|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
+| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
+| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
+| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+
+: Confusion matrix by proportion of each class, model 1 trained on Area C, applied to Spray Lake.
