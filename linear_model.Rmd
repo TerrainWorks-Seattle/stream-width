@@ -1,6 +1,6 @@
 ---
-title: "linear_model"
-output: html_document
+title: "Ordinal logistic regression"
+output: github_document
 ---
 
 ```{r setup}
@@ -9,11 +9,12 @@ suppressPackageStartupMessages({
   library(terra)
   library(tmap)
   library(data.table)
-  library(patchwork)
   library(ggplot2)
+  library(PResiduals)
+  library(sure)
 })
 
-elev <- rast("streams_clipped/elev_areactest.tif")
+# elev <- rast("streams_clipped/elev_areactest.tif")
 nodes <- read_sf("streams_clipped/nodes_testc.shp")
 cut_blocks <- read_sf("streams_clipped/cut_blocks.shp")
 streams <- read_sf("streams_clipped/streams_clipped.shp")
@@ -24,7 +25,7 @@ streams <- read_sf("streams_clipped/streams_clipped.shp")
 # Make sure everything is in the same CRS
 # set everything to utm 11N
 cut_blocks <- st_transform(cut_blocks, "EPSG:26911")
-elev <- project(elev, "EPSG:26911")
+#elev <- project(elev, "EPSG:26911")
 st_crs(nodes) <- "EPSG:26911"
 
 nodes[nodes$SurvReach == -9999, ]$SurvReach <- NA
@@ -63,41 +64,155 @@ Survey nodes skew right. I wonder if this may be because nodes with low contribu
 
 
 ```{r}
-ggplot() +
-  geom_density(data=nodes, aes(x = AREA_SQKM, fill = "All"), alpha = 0.4) +
-  geom_density(data=nodes[!is.na(nodes$SurvReach),], aes(x = AREA_SQKM, fill = "Survey"), alpha = 0.4) +
-  scale_x_continuous(trans = "log10") 
 
-```
-
-```{r}
 data <- nodes
 st_geometry(data) <- NULL
 setDT(data)
 
 data <- data[, .(
-  stream_class = factor(SurvType, levels = c("EPH", 
-                                     "INT", 
-                                     "TRANS", 
-                                     "SMPRM", 
-                                     "LGPRM")), 
+  NodeNum, 
+  stream_class = factor(SurvType, 
+                        levels = c("EPH", 
+                                   "INT", 
+                                   "TRANS", 
+                                   "SMPRM", 
+                                   "LGPRM")), 
   area = AREA_SQKM, 
   area_log10 = log10(AREA_SQKM), 
   elev = ELEV_M, 
   grad20 = GRAD20, 
   mean_grad = MeanGrad
 )]
+
 data_md <- data[!is.na(stream_class)]
 
-m1 <- rms::lrm(
-  stream_class ~ area_log10, 
-  data = data_md)
 
+ggplot() +
+  geom_density(data = data, aes(x = area, fill = "All"), alpha = 0.4) +
+  geom_density(data = data_md, aes(x = area, fill = "Survey"), alpha = 0.4) +
+  scale_x_continuous(trans = "log10") 
 
+ggplot(data_md) + 
+  geom_boxplot(aes(x = stream_class, y = area)) + 
+  scale_y_log10()
 
-m1_AC <- rms::lrm(SurvType ~ log10Area, data=data_AC, x=TRUE, y=TRUE, maxit=10000)
-
-m1_all <- rms::lrm(SurvType ~ log10Area, data=data_all, x=TRUE, y=TRUE, maxit=10000))
 ```
+
+```{r}
+
+# rms::lrm wasn't working for some reason
+# but this presumably does the same thing
+# (ordered logistic regression)
+m1 <- MASS::polr(
+  stream_class ~ area_log10, 
+  data = data_md, 
+  Hess = TRUE)
+summary(m1)
+f <- fitted(m1)
+head(f)
+apply(f, 2, max)
+apply(f, 2, sum)
+
+```
+
+# Residual analysis
+
+First, we get residuals and plot them using SBS residuals in the `PResiduals` package. 
+
+```{r}
+# get resid using SBS
+resid_sbs <- presid(m1)
+
+par(mfcol = c(1, 2))
+plot(x = data_md$area_log10, y = resid_sbs, pch = 2)
+qqplot(runif(length(resid_sbs)), resid_sbs)
+```
+
+Next, we use surrogate residuals from the `sure` package. 
+
+```{r}
+resid_sure <- sure::resids(m1)
+
+par(mfcol = c(1, 2))
+plot(x = data_md$area_log10, y = resid_sure, pch = 2)
+qqnorm(resid_sure)
+```
+
+They look a bit funky, but it might be because our data is not evenly distributed between classes. Let's test for spatial autocorrelation. 
+
+```{r}
+# plot residuals
+data_md$resid <- resid_sure
+merged <- merge(data_md, nodes, by = "NodeNum", all.x = TRUE, all.y = FALSE) |> 
+  st_as_sf()
+
+tm_shape(merged) + 
+  tm_dots(fill = "resid", 
+          fill.scale = tm_scale_continuous())
+```
+
+```{r}
+# Spatial autocorrelation in resiuals
+library(gstat)
+library(spdep)
+
+# semivariogram
+v <- variogram(resid ~ 1, merged)
+plot(v)
+
+# Moran's I
+# Set k nearest neighbors
+nb <- knn2nb(knearneigh(merged, 1))
+lw <- nb2listw(nb)
+lag <- lag.listw(lw, merged$resid)
+plot(merged$resid, lag)
+moran.test(merged$resid, lw)
+```
+
+Based on the Moran's I test, we have significant spatial autocorrelation in the 
+surrogate residuals. 
+One issue here is that the observations are on a reach level while our 
+predictions are at a node level. Let's try again, aggregating data by reach. 
+
+To do this, I will create a sfnetwork object from the sf nodes object. 
+
+```{r eval = FALSE}
+library(igraph)
+library(tidygraph)
+library(sfnetworks)
+setDT(nodes)
+#nodes <- st_as_sf(nodes)
+edges <- nodes[, .(from = NodeNum, 
+                    to = ToNode, 
+                    surv_type = SurvType,
+                    channel_id = CHANNEL_ID, 
+                    area = AREA_SQKM, 
+                    elev = ELEV_M, 
+                    grad = GRAD20, 
+                    width_m = WIDTH_M, 
+                    depth_m = DEPTH_M, 
+                    incise = INCISE10
+                    )]
+edges[to == -9999, to := NA]
+edges <- edges[!is.na(to)]
+
+channel_network <- sfnetwork(nodes, edges)
+# add geometry to edges (draw a straight line between nodes)
+channel_network = convert(channel_network, to_spatial_explicit)
+# aggregate by reach (remove intermediate nodes and concatenate edges)
+str_unique <- function(x) paste(unique(x), collapse = ",")
+channel_reaches <- convert(channel_network, to_spatial_smooth, 
+                           summarise_attributes = list(
+                             channel_id = str_unique, 
+                             surv_type = str_unique,
+                             area = "max", 
+                             elev = "mean", 
+                             grad = "mean", 
+                             width_m = "mean", 
+                             depth_m = "mean", 
+                             incise = "mean"))
+
+```
+
 
 
