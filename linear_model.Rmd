@@ -63,7 +63,7 @@ This is the distribution of all nodes in the network vs the nodes which we have 
 Survey nodes skew right. I wonder if this may be because nodes with low contributing area often did not show up as channels (ie width = 0). 
 
 
-```{r}
+```{r density-plots}
 
 data <- nodes
 st_geometry(data) <- NULL
@@ -98,7 +98,7 @@ ggplot(data_md) +
 
 ```
 
-```{r}
+```{r fit-model1}
 
 # rms::lrm wasn't working for some reason
 # but this presumably does the same thing
@@ -119,7 +119,7 @@ apply(f, 2, sum)
 
 First, we get residuals and plot them using SBS residuals in the `PResiduals` package. 
 
-```{r}
+```{r sbs-resid}
 # get resid using SBS
 resid_sbs <- presid(m1)
 
@@ -130,7 +130,7 @@ qqplot(runif(length(resid_sbs)), resid_sbs)
 
 Next, we use surrogate residuals from the `sure` package. 
 
-```{r}
+```{r sure-resid-1}
 resid_sure <- sure::resids(m1)
 
 par(mfcol = c(1, 2))
@@ -140,7 +140,7 @@ qqnorm(resid_sure)
 
 They look a bit funky, but it might be because our data is not evenly distributed between classes. Let's test for spatial autocorrelation. 
 
-```{r}
+```{r plot-sure-resid-1}
 # plot residuals
 data_md$resid <- resid_sure
 merged <- merge(data_md, nodes, by = "NodeNum", all.x = TRUE, all.y = FALSE) |> 
@@ -151,7 +151,7 @@ tm_shape(merged) +
           fill.scale = tm_scale_continuous())
 ```
 
-```{r}
+```{r spatial-autocorrelation-1}
 # Spatial autocorrelation in resiuals
 library(gstat)
 library(spdep)
@@ -175,8 +175,16 @@ One issue here is that the observations are on a reach level while our
 predictions are at a node level. Let's try again, aggregating data by reach. 
 
 To do this, I will create a sfnetwork object from the sf nodes object. 
+Then, I will aggregate nodes into reaches by defining a reach as a length 
+of stream between two confluences, and aggregating covariates. 
+I will only include reaches as predictors where all nodes within that reach 
+were assigned the same stream class. 
 
-```{r eval = FALSE}
+This is an imperfect way of doing this, but hopefully should be enough 
+to get a rough idea of whether we are still seeing spatial autocorrelation 
+or whether it was just due primarily to different aggregation levels. 
+
+```{r aggregate-reaches}
 library(igraph)
 library(tidygraph)
 library(sfnetworks)
@@ -200,7 +208,7 @@ channel_network <- sfnetwork(nodes, edges)
 # add geometry to edges (draw a straight line between nodes)
 channel_network = convert(channel_network, to_spatial_explicit)
 # aggregate by reach (remove intermediate nodes and concatenate edges)
-str_unique <- function(x) paste(unique(x), collapse = ",")
+str_unique <- function(x) paste(unique(na.omit(x), na.rm= TRUE), collapse = ",")
 channel_reaches <- convert(channel_network, to_spatial_smooth, 
                            summarise_attributes = list(
                              channel_id = str_unique, 
@@ -212,7 +220,78 @@ channel_reaches <- convert(channel_network, to_spatial_smooth,
                              depth_m = "mean", 
                              incise = "mean"))
 
+edges_reaches <- st_as_sf(activate(channel_reaches, "edges"))
+edges_reaches$.tidygraph_edge_index <- NULL
+st_crs(edges_reaches) <- "EPSG:26911"
+# write to shapefile
+# st_write(edges_reaches, "edges_reaches/edges_reaches.shp")
 ```
 
+```{r fit-model-2}
+
+# make ordered factor stream class for ordinal regression
+# remove NA
+unique_class <- function(s) {
+  st <- strsplit(s, ",")[[1]]
+  st <- st[!st == "NA"]
+  if (length(st) == 1) return(st) else return(NA)
+}
+edges_reaches$stream_class <- factor(
+  sapply(edges_reaches$surv_type, unique_class), 
+  levels = c("EPH", 
+             "INT", 
+             "TRANS", 
+             "SMPRM", 
+             "WET"))
 
 
+data_m2 <- edges_reaches[!is.na(edges_reaches$stream_class), ]
+data_m2$area_log10 <- log10(data_m2$area)
+
+m2 <- MASS::polr(
+  stream_class ~ area_log10, 
+  data = data_m2, 
+  Hess = TRUE)
+summary(m2)
+f <- fitted(m2)
+head(f)
+apply(f, 2, max)
+apply(f, 2, sum)
+```
+
+```{r resid-2}
+data_m2$resid <- sure::resids(m2)
+par(mfcol = c(1, 2))
+plot(x = data_m2$area_log10, y = data_m2$resid, pch = 2)
+qqnorm(data_m2$resid)
+```
+
+```{r map-resid-2}
+tm_shape(data_m2) + 
+  tm_dots(fill = "resid", 
+          fill.scale = tm_scale_continuous())
+```
+
+```{r spatial-autocorrelation-2}
+
+# semivariogram 
+# this isn't working with lines, only points
+# use the node/point at the beginning of each reach
+nodes_reaches <- st_as_sf(activate(channel_reaches, "nodes"))[edges_reaches$from, ]
+data_nodes <- nodes_reaches[!is.na(edges_reaches$stream_class), ]
+data_nodes$resid <- data_m2$resid
+v <- variogram(resid ~ 1, data_nodes)
+plot(v)
+
+# Moran's I
+# Set k nearest neighbors
+nb <- knn2nb(knearneigh(data_nodes, 1))
+lw <- nb2listw(nb)
+lag <- lag.listw(lw, data_nodes$resid)
+plot(data_nodes$resid, lag)
+moran.test(data_nodes$resid, lw)
+```
+
+We are still seeing spatial autocorrelation. Next steps could include trying to
+fit a model which includes more predictors and to add a spatial autocorrelation 
+term. 

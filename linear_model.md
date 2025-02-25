@@ -95,7 +95,7 @@ ggplot() +
   scale_x_continuous(trans = "log10") 
 ```
 
-![](linear_model_files/figure-gfm/unnamed-chunk-1-1.png)<!-- -->
+![](linear_model_files/figure-gfm/density-plots-1.png)<!-- -->
 
 ``` r
 ggplot(data_md) + 
@@ -103,7 +103,7 @@ ggplot(data_md) +
   scale_y_log10()
 ```
 
-![](linear_model_files/figure-gfm/unnamed-chunk-1-2.png)<!-- -->
+![](linear_model_files/figure-gfm/density-plots-2.png)<!-- -->
 
 ``` r
 # rms::lrm wasn't working for some reason
@@ -175,7 +175,7 @@ plot(x = data_md$area_log10, y = resid_sbs, pch = 2)
 qqplot(runif(length(resid_sbs)), resid_sbs)
 ```
 
-![](linear_model_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+![](linear_model_files/figure-gfm/sbs-resid-1.png)<!-- -->
 
 Next, we use surrogate residuals from the `sure` package.
 
@@ -187,7 +187,7 @@ plot(x = data_md$area_log10, y = resid_sure, pch = 2)
 qqnorm(resid_sure)
 ```
 
-![](linear_model_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+![](linear_model_files/figure-gfm/sure-resid-1-1.png)<!-- -->
 
 They look a bit funky, but it might be because our data is not evenly
 distributed between classes. Let’s test for spatial autocorrelation.
@@ -205,7 +205,7 @@ tm_shape(merged) +
 
     ## Variable(s) "fill" contains positive and negative values, so midpoint is set to 0. Set midpoint = NA to show the full range of visual values.
 
-![](linear_model_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+![](linear_model_files/figure-gfm/plot-sure-resid-1-1.png)<!-- -->
 
 ``` r
 # Spatial autocorrelation in resiuals
@@ -234,7 +234,7 @@ v <- variogram(resid ~ 1, merged)
 plot(v)
 ```
 
-![](linear_model_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+![](linear_model_files/figure-gfm/spatial-autocorrelation-1-1.png)<!-- -->
 
 ``` r
 # Moran's I
@@ -245,7 +245,7 @@ lag <- lag.listw(lw, merged$resid)
 plot(merged$resid, lag)
 ```
 
-![](linear_model_files/figure-gfm/unnamed-chunk-6-2.png)<!-- -->
+![](linear_model_files/figure-gfm/spatial-autocorrelation-1-2.png)<!-- -->
 
 ``` r
 moran.test(merged$resid, lw)
@@ -257,11 +257,11 @@ moran.test(merged$resid, lw)
     ## data:  merged$resid  
     ## weights: lw    
     ## 
-    ## Moran I statistic standard deviate = 153.42, p-value < 2.2e-16
+    ## Moran I statistic standard deviate = 154.07, p-value < 2.2e-16
     ## alternative hypothesis: greater
     ## sample estimates:
     ## Moran I statistic       Expectation          Variance 
-    ##      6.978612e-01     -1.373287e-05      2.069077e-05
+    ##      7.008184e-01     -1.373287e-05      2.069076e-05
 
 Based on the Moran’s I test, we have significant spatial autocorrelation
 in the surrogate residuals. One issue here is that the observations are
@@ -269,16 +269,57 @@ on a reach level while our predictions are at a node level. Let’s try
 again, aggregating data by reach.
 
 To do this, I will create a sfnetwork object from the sf nodes object.
+Then, I will aggregate nodes into reaches by defining a reach as a
+length of stream between two confluences, and aggregating covariates. I
+will only include reaches as predictors where all nodes within that
+reach were assigned the same stream class.
+
+This is an imperfect way of doing this, but hopefully should be enough
+to get a rough idea of whether we are still seeing spatial
+autocorrelation or whether it was just due primarily to different
+aggregation levels.
 
 ``` r
 library(igraph)
+```
+
+    ## 
+    ## Attaching package: 'igraph'
+
+    ## The following objects are masked from 'package:terra':
+    ## 
+    ##     blocks, compare, union
+
+    ## The following objects are masked from 'package:stats':
+    ## 
+    ##     decompose, spectrum
+
+    ## The following object is masked from 'package:base':
+    ## 
+    ##     union
+
+``` r
 library(tidygraph)
+```
+
+    ## 
+    ## Attaching package: 'tidygraph'
+
+    ## The following object is masked from 'package:igraph':
+    ## 
+    ##     groups
+
+    ## The following object is masked from 'package:stats':
+    ## 
+    ##     filter
+
+``` r
 library(sfnetworks)
 setDT(nodes)
 #nodes <- st_as_sf(nodes)
 edges <- nodes[, .(from = NodeNum, 
                     to = ToNode, 
-                    type = SurvType,
+                    surv_type = SurvType,
                     channel_id = CHANNEL_ID, 
                     area = AREA_SQKM, 
                     elev = ELEV_M, 
@@ -291,18 +332,172 @@ edges[to == -9999, to := NA]
 edges <- edges[!is.na(to)]
 
 channel_network <- sfnetwork(nodes, edges)
+```
+
+    ## Checking if spatial network structure is valid...
+
+    ## Spatial network structure is valid
+
+``` r
 # add geometry to edges (draw a straight line between nodes)
 channel_network = convert(channel_network, to_spatial_explicit)
 # aggregate by reach (remove intermediate nodes and concatenate edges)
-lu <- function(x) length(unique(x))
+str_unique <- function(x) paste(unique(na.omit(x), na.rm= TRUE), collapse = ",")
 channel_reaches <- convert(channel_network, to_spatial_smooth, 
                            summarise_attributes = list(
-                             channel_id = unique, 
-                             type = unique,
+                             channel_id = str_unique, 
+                             surv_type = str_unique,
                              area = "max", 
                              elev = "mean", 
                              grad = "mean", 
                              width_m = "mean", 
                              depth_m = "mean", 
                              incise = "mean"))
+
+edges_reaches <- st_as_sf(activate(channel_reaches, "edges"))
+edges_reaches$.tidygraph_edge_index <- NULL
+st_crs(edges_reaches) <- "EPSG:26911"
+# write to shapefile
+# st_write(edges_reaches, "edges_reaches/edges_reaches.shp")
 ```
+
+``` r
+# make ordered factor stream class for ordinal regression
+# remove NA
+unique_class <- function(s) {
+  st <- strsplit(s, ",")[[1]]
+  st <- st[!st == "NA"]
+  if (length(st) == 1) return(st) else return(NA)
+}
+edges_reaches$stream_class <- factor(
+  sapply(edges_reaches$surv_type, unique_class), 
+  levels = c("EPH", 
+             "INT", 
+             "TRANS", 
+             "SMPRM", 
+             "WET"))
+
+
+data_m2 <- edges_reaches[!is.na(edges_reaches$stream_class), ]
+data_m2$area_log10 <- log10(data_m2$area)
+
+m2 <- MASS::polr(
+  stream_class ~ area_log10, 
+  data = data_m2, 
+  Hess = TRUE)
+summary(m2)
+```
+
+    ## Call:
+    ## MASS::polr(formula = stream_class ~ area_log10, data = data_m2, 
+    ##     Hess = TRUE)
+    ## 
+    ## Coefficients:
+    ##            Value Std. Error t value
+    ## area_log10 2.258    0.08771   25.74
+    ## 
+    ## Intercepts:
+    ##             Value    Std. Error t value 
+    ## EPH|INT      -3.2958   0.1378   -23.9178
+    ## INT|TRANS    -1.4866   0.1199   -12.3962
+    ## TRANS|SMPRM  -0.4241   0.1139    -3.7247
+    ## SMPRM|WET     3.4306   0.2657    12.9104
+    ## 
+    ## Residual Deviance: 3662.087 
+    ## AIC: 3672.087
+
+``` r
+f <- fitted(m2)
+head(f)
+```
+
+    ##           EPH        INT      TRANS      SMPRM          WET
+    ## 1 0.562119943 0.32473413 0.07091665 0.04129631 0.0009329751
+    ## 2 0.197572082 0.40296256 0.21255097 0.18206909 0.0048452961
+    ## 3 0.481660076 0.36849772 0.09242781 0.05612596 0.0012884375
+    ## 4 0.566643383 0.32204381 0.06982145 0.04057537 0.0009159819
+    ## 5 0.008679171 0.04206506 0.08321599 0.74560466 0.1204351162
+    ## 6 0.035087120 0.14659804 0.20946517 0.57693408 0.0319155898
+
+``` r
+apply(f, 2, max)
+```
+
+    ##       EPH       INT     TRANS     SMPRM       WET 
+    ## 0.9347080 0.4237942 0.2595445 0.7458840 0.2516371
+
+``` r
+apply(f, 2, sum)
+```
+
+    ##      EPH      INT    TRANS    SMPRM      WET 
+    ## 920.7613 515.6590 180.1178 229.4898  13.9721
+
+``` r
+data_m2$resid <- sure::resids(m2)
+par(mfcol = c(1, 2))
+plot(x = data_m2$area_log10, y = data_m2$resid, pch = 2)
+qqnorm(data_m2$resid)
+```
+
+![](linear_model_files/figure-gfm/resid-2-1.png)<!-- -->
+
+``` r
+tm_shape(data_m2) + 
+  tm_dots(fill = "resid", 
+          fill.scale = tm_scale_continuous())
+```
+
+    ## Variable(s) "fill" contains positive and negative values, so midpoint is set to 0. Set midpoint = NA to show the full range of visual values.
+
+![](linear_model_files/figure-gfm/map-resid-2-1.png)<!-- -->
+
+``` r
+# semivariogram 
+# this isn't working with lines, only points
+# use the node/point at the beginning of each reach
+nodes_reaches <- st_as_sf(activate(channel_reaches, "nodes"))[edges_reaches$from, ]
+data_nodes <- nodes_reaches[!is.na(edges_reaches$stream_class), ]
+data_nodes$resid <- data_m2$resid
+v <- variogram(resid ~ 1, data_nodes)
+plot(v)
+```
+
+![](linear_model_files/figure-gfm/spatial-autocorrelation-2-1.png)<!-- -->
+
+``` r
+# Moran's I
+# Set k nearest neighbors
+nb <- knn2nb(knearneigh(data_nodes, 1))
+```
+
+    ## Warning in knn2nb(knearneigh(data_nodes, 1)): neighbour object has 570
+    ## sub-graphs
+
+``` r
+lw <- nb2listw(nb)
+lag <- lag.listw(lw, data_nodes$resid)
+plot(data_nodes$resid, lag)
+```
+
+![](linear_model_files/figure-gfm/spatial-autocorrelation-2-2.png)<!-- -->
+
+``` r
+moran.test(data_nodes$resid, lw)
+```
+
+    ## 
+    ##  Moran I test under randomisation
+    ## 
+    ## data:  data_nodes$resid  
+    ## weights: lw    
+    ## 
+    ## Moran I statistic standard deviate = 13.36, p-value < 2.2e-16
+    ## alternative hypothesis: greater
+    ## sample estimates:
+    ## Moran I statistic       Expectation          Variance 
+    ##      0.3923857882     -0.0005379236      0.0008649927
+
+We are still seeing spatial autocorrelation. Next steps could include
+trying to fit a model which includes more predictors and to add a
+spatial autocorrelation term.
