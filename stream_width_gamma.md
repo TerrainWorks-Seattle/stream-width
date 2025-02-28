@@ -38,8 +38,8 @@ We can choose $f(c_s)$ based on our knowledge of the system, or choose
 it based on what fits the data best. Traditional linear regression would
 set 
 $$
-log(\mu_s) = \alpha + \beta c_s.
-$$ 
+log(\mu_s) = \alpha + \beta c_s
+$$
 or 
 $$
 \mu_s = e^{\alpha + \beta c_s}
