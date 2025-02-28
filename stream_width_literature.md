@@ -23,7 +23,7 @@ xgboost.
   still spatial autocorrelation (which I would guess there would be).
 
 ## Notes
-* Chang et al., 2024 (Water Resources Research): 
+* Chang et al., 2024 (Water Resources Research) (([STREAM-geo](https://figshare.com/articles/dataset/Stream_Reach_Evaluation_and_Metrics_-_Geometry_STREAM-geo_/24463240/1)): 
   - Create independent models for median width and depth 
     using HYDRoSWOT as training dataset, testing 
     several different ML algorithms: 
@@ -32,7 +32,7 @@ xgboost.
       - XGBoost
       - Multilayer perceptron (neural net)
   - published dataset of predictions for all NHDPLUS
-    reaches ([STREAM-geo](https://figshare.com/articles/dataset/Stream_Reach_Evaluation_and_Metrics_-_Geometry_STREAM-geo_/24463240/1))
+    reaches 
   - RF and XGBoost worked best. 
   - Important predictors: 
     - discharge
@@ -43,7 +43,7 @@ xgboost.
   - In linear regression, found negative 
     relationship between watershed vegetation and width 
     and depth. 
-* Modaresi Rad et al., 2024 (Journal of Geophysical Research)
+* Modaresi Rad et al., 2024 (Journal of Geophysical Research) ([predictions](https://www.hydroshare.org/resource/d147fcf554a54b2aaa4f146f85da0e03/))
   - Used ensemble ML to separately predict bankfull width, 
     in-channel width, bankfull depth, and in-channel depth
     HYDRoSWOT as training dataset
@@ -53,7 +53,7 @@ xgboost.
     - catchment area (width)
     - elevation (depth)
     - slope (depth)
-* Zarrabi et al., 2025 (Water Resources Reseach)
+* Zarrabi et al., 2025 (Water Resources Reseach) ([predictions](https://www.hydroshare.org/resource/63ae139ccd2445959470d0e5a2ebf6a5/))
   - create independent models for bankfull and mean width 
     and depth using HYDRoSWOT as training dataset
   - Most important predictors from MDI values: 
