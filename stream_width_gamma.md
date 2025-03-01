@@ -36,14 +36,10 @@ distribution.
 
 We can choose $f(c_s)$ based on our knowledge of the system, or choose
 it based on what fits the data best. Traditional linear regression would
-set 
-
-$$
-log(\mu_s) = \alpha + \beta c_s
-$$
-or 
-$$
-\mu_s = e^{\alpha + \beta c_s}.
+set $$
+log(\mu_s) = \alpha + \beta c_s.
+$$ or $$
+\mu_s = e^{\alpha + \beta c_s}
 $$
 
 This ensures that $\mu_s$ is always positive, and makes the mean of
@@ -191,3 +187,47 @@ have to be a bit more creative. I’ve coded up some custom models using
 [TMB](https://kaskr.github.io/adcomp/_book/Introduction.html), which can
 be tricky to code and debug but quite efficient to fit once you get it
 set up.
+
+# Integrated model (different sampling types)
+
+Our data may be from a mix of different surveys where different types of
+data was collected on stream width. In this example, let’s say one
+survey gives the width class of a stream segment, whereas another gives
+the average width.
+
+To estimate width of all segments, we can use an integrated model, as
+described in Thorson and Kristensen (page 149). We can model our
+observations, $y_i$ (now indexed by $i$ rather than $s$ to represent
+that we may have more than one observation for a given segment) with the
+distribution
+
+$$
+y_i \sim 
+\begin{cases}
+        Gamma(w, \phi) & \text{if } y_i \text{ samples width}\\
+        Ord(Gamma(w, \phi)) & \text{if } y_i \text{ samples width class}
+    \end{cases}
+$$
+
+where $Ord(Gamma(w, \phi))$ represents the ordinal distribution
+described above. We can generalize our equation to include more possible
+covariates. Denoting $X$ as the set of covariates, and $\beta$ as
+parameters, we model width as
+
+$$
+w_i = e^{\mu_i}
+$$ where $$
+\mu_i = f_x(X_i, \beta) + \psi_i
+$$
+
+and $\psi$ is the spatial random effect, which follows a multivariate
+normal distribution
+
+$$
+\psi \sim MVN(0, \Sigma).
+$$
+
+We can set $f_x(X,\beta)$ as anything we want. Methods exist for fitting
+similar models where $f_x$ is fit as a random forest or other nonlinear
+ML model ([available in the spmodel R
+package](https://usepa.github.io/spmodel/reference/splmRF.html)).

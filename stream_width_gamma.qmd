@@ -140,10 +140,55 @@ $$
 \mathbf \psi \sim MVN(0, \Sigma)
 $$
 
-Where $\Sigma$ is the variance-covariance matrix for $\mathbf \psi$, describing spatial autocorrelation. Now there are more parameters to fit, including the values for the spatial random effect, $\mathbf \psi$, and several parameters describing $\Sigma$. 
+Where $\Sigma$ is the variance-covariance matrix for $\mathbf \psi$, describing spatial autocorrelation. Now there are more parameters to fit, including the values for 
+the spatial random effect, $\mathbf \psi$, and several parameters describing $\Sigma$. 
 
 There are a few ways to set $\Sigma$. In this case, we will want it to represent the topology of the stream, with autocorrelation based on both stream distance and euclidean distance. 
 
 If we had continuous stream width data, SSN could do this for us easily. Unfortunately, we dont. We have ordinal stream width data, so we will have to be a bit more creative. I've coded up some custom models using [TMB](https://kaskr.github.io/adcomp/_book/Introduction.html), which can be tricky to code and debug but quite efficient to fit once you get it set up. 
+
+# Integrated model (different sampling types)
+
+Our data may be from a mix of different surveys where different types of data
+was collected on stream width. In this example, let's say one survey gives 
+the width class of a stream segment, whereas another gives the average width. 
+
+To estimate width of all segments, we can use an integrated model, as
+described in Thorson and Kristensen (page 149). We can model our observations, 
+$y_i$ (now indexed by $i$ rather than $s$ to represent that we may have more than one observation for a given segment) with the distribution
+
+$$
+y_i \sim 
+\begin{cases}
+        Gamma(w, \phi) & \text{if } y_i \text{ samples width}\\
+        Ord(Gamma(w, \phi)) & \text{if } y_i \text{ samples width class}
+    \end{cases}
+$$
+
+where $Ord(Gamma(w, \phi))$ represents the ordinal distribution described above. 
+We can generalize our equation to include more possible covariates. Denoting $X$ 
+as the set of covariates, and  $\beta$ as parameters, we model width as
+
+$$
+w_i = e^{\mu_i}
+$$
+where
+$$
+\mu_i = f_x(X_i, \beta) + \psi_i
+$$
+
+and $\psi$ is the spatial random effect, which follows a 
+multivariate normal distribution
+
+$$
+\psi \sim MVN(0, \Sigma).
+$$
+
+We can set $f_x(X,\beta)$ as anything we want. Methods exist 
+for fitting similar models where $f_x$ is fit as a random 
+forest or other nonlinear ML model ([available in the spmodel R package](https://usepa.github.io/spmodel/reference/splmRF.html)). 
+
+
+
 
 
