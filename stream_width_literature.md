@@ -21,6 +21,9 @@ xgboost.
   also want to include other covariates they excluded like slope metrics.
   We could still include spatial autocorrelation term if there is 
   still spatial autocorrelation (which I would guess there would be).
+- This won't work in Alberta because NHD is only for US.
+- Fit a RF model to predict class or width and use this as a predictor in
+  the full model which will include spatial autocorrelation. 
 
 ## Notes
 * Chang et al., 2024 (Water Resources Research) (([STREAM-geo](https://figshare.com/articles/dataset/Stream_Reach_Evaluation_and_Metrics_-_Geometry_STREAM-geo_/24463240/1)): 
