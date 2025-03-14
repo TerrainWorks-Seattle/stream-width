@@ -1,0 +1,101 @@
+---
+title: "Width class (spatial model)"
+output: html_document
+---
+
+```{r}
+library(sf)
+library(sfnetworks)
+library(SSNbler)
+
+```
+
+```{r}
+library(SSN2)
+library(SSNbler)
+library(ggplot2)
+library(sf)
+
+file.copy(from = system.file("streamsdata", package = "SSNbler"), 
+          to = "mf04", recursive = TRUE, overwrite = FALSE, 
+          copy.mode = FALSE)
+path <- "mf04/streamsdata"
+
+MF_streams <- st_read(paste0(path, "/MF_streams.gpkg"))
+MF_obs <- st_read(paste0(path, "/MF_obs.gpkg"))
+MF_pred1km <- st_read(paste0(path, "/MF_pred1km.gpkg"))
+MF_CapeHorn <- st_read(paste0(path, "/MF_CapeHorn.gpkg"))
+
+
+## Set path for new folder for lsn
+lsn.path <- paste0("mf04")
+
+edges <- lines_to_lsn(
+  streams = MF_streams,
+  lsn_path = lsn.path,
+  check_topology = TRUE,
+  snap_tolerance = 0.05,
+  topo_tolerance = 20,
+  overwrite = TRUE
+)
+obs <- sites_to_lsn(
+  sites = MF_obs,
+  edges = edges,
+  lsn_path = lsn.path,
+  file_name = "obs",
+  snap_tolerance = 100,
+  save_local = TRUE,
+  overwrite = TRUE
+)
+```
+
+
+Start by converting edges and nodes to SSN object using SSNbler. 
+
+```{r}
+edges <- read_sf("edges_reaches/edges.gpkg")
+# This takes a while and uses a lot of CPU and memory
+# should be able to skip this step because we already have 
+# all the topological information about the network. 
+lsn_path <- "edges_reaches"
+# edges_ssn <- lines_to_lsn(
+#   streams = edges, 
+#   lsn_path = "edges_reaches", 
+#   check_topology = TRUE, 
+#   snap_tolerance = 0.05, 
+#   topo_tolerance = 02, 
+#   overwrite = TRUE
+# )
+
+# alternative way 
+network <- as_sfnetwork(edges)
+# make the required files
+# edges.gpkg
+write_sf(edges_ssn, file.path(lsn_path, "edges.gpkg"))
+# nodes.gpkg
+
+# nodexy.csv
+# noderelationships.csv
+# relationships.csv
+```
+
+Here is an idea about how we might be able to model width and width class 
+where we have both point observations of width and depth, and reach-level 
+observations of width class. Below, I will simulate what this data might 
+look like and fit a model to it. 
+
+We model log(width) $log(w_{s,r})$ at location $s$ in reach $r$
+as a spatially continuous variable. 
+Width class $C_r$ is a function of all the $w_{s,r}$ over reach $r$. 
+
+$$
+
+$$
+
+Then add observations. 
+
+```{r}
+
+```
+
+
