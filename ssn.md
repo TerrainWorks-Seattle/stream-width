@@ -1,4 +1,4 @@
-Ordinal logistic regression
+ssn
 ================
 
 # SSN data object
@@ -58,7 +58,10 @@ mapping it to the LSN:
   length of the edge found between the downstream end node and the site
   location by the total edge length.
 
-# Make example files
+# Example files
+
+Example files are in ssn_demo. The network shown below will fail because
+downstream divergences are not allowed.
 
 ``` r
 library(sf)
@@ -120,20 +123,132 @@ text(x = e_c[, 1],
      1:11, cex = .5)
 ```
 
-![](ssn_files/figure-gfm/unnamed-chunk-1-1.png)<!-- -->
+![](ssn_files/figure-gfm/setup-data-1.png)<!-- -->
 
 ``` r
-# Save files
-write.csv(nodexy, "ssn_demo/nodexy.csv")
-write.csv(noderelationships, "ssn_demo/noderelationships.csv")
-write.csv(relationships, "ssn_demo/relationships.csv")
-write_sf(nodes, "ssn_demo/nodes.gpkg")
+# # Save files
+# write.csv(nodexy, "ssn_demo/nodexy.csv", row.names = FALSE)
+# write.csv(noderelationships, "ssn_demo/noderelationships.csv", row.names = FALSE)
+# write.csv(relationships, "ssn_demo/relationships.csv", row.names = FALSE)
+# write_sf(nodes, "ssn_demo/nodes.gpkg")
+# write_sf(edges, "ssn_demo/edges.gpkg")
 ```
 
-    ## writing: substituting ENGCRS["Undefined Cartesian SRS with unknown unit"] for missing CRS
+This will fail because SSN does not allow divergences (as occurs at node
+5). Remove the segments which go through node 7.
 
 ``` r
-write_sf(edges, "ssn_demo/edges.gpkg")
+lines <- lapply(1:11, \(e) {
+  # edge from a to b
+  node_a <- noderelationships[e, "fromnode"]
+  node_b <- noderelationships[e, "tonode"]
+  xy_a <- st_point(c(nodexy[node_a, ]$xcoord, nodexy[node_a, ]$ycoord))
+  xy_b <- st_point(c(nodexy[node_b, ]$xcoord, nodexy[node_b, ]$ycoord))
+  st_linestring(c(xy_a, xy_b))
+})
+# add one more area
+
+newline <- st_linestring(c(
+  st_point(c(10, 10)), 
+  st_point(c(11, 11))
+))
+lines <- c(lines, list(newline))
+edges <- st_as_sf(data.frame(rid = 1:12, 
+                             geometry = st_sfc(lines)))
+
+edges <- edges[(1:12)[-c(6, 10)], ]
+st_crs(edges) <- "EPSG:26911"
+# do I need observations? 
+
+obs <- list(
+  st_point(c(2, 4.5)), 
+  st_point(c(2.1, 2.9)), 
+  st_point(c(2.8, 6.8))
+  )
+obs <- st_as_sf(data.frame(
+  temp = rnorm(3, 25, 1), 
+  geometry = st_sfc(obs)
+))
+st_crs(obs) <- st_crs(edges)
+
+plot(nodexy$xcoord, nodexy$ycoord, asp = 1)
+plot(edges, add = TRUE)
+plot(obs, add = TRUE, pch = 19)
 ```
 
-    ## writing: substituting ENGCRS["Undefined Cartesian SRS with unknown unit"] for missing CRS
+![](ssn_files/figure-gfm/fix-error-1.png)<!-- -->
+
+``` r
+library(SSNbler)
+edges <- lines_to_lsn(
+  streams = edges,
+  lsn_path = "ssn_demo",
+  check_topology = TRUE,
+  snap_tolerance = 0.05,
+  topo_tolerance = .1,
+  overwrite = TRUE
+)
+```
+
+    ## 
+    ## Saved ssn_demo/edges.gpkg
+
+    ## Building Edge Relationships ...
+
+    ## Checking network topology
+
+    ## Saving ssn_demo/nodes.gpkg
+
+    ## Building relationship tables....
+
+    ## 
+    ## 0 topology errors identified. node_errors.gpkg not written to file.
+    ## 
+    ## 2 Outlets found. Visually check nodecat == Outlet locations in ssn_demo/nodes.gpkg and correct errors if found.
+
+``` r
+obs <- sites_to_lsn(
+  sites = obs, 
+  edges = edges, 
+  lsn_path = "ssn_demo", 
+  file_name = "obs", 
+  snap_tolerance = .1, 
+  save_local = TRUE, 
+  overwrite = TRUE
+)
+```
+
+    ## 
+    ## Finding locations on nearest edge segments
+
+    ## Snapping points to edges
+
+    ## Calculating ratio values
+
+    ## Saving snapped sites ssn_demo/obs.gpkg
+
+    ## FINISHED sites_to_lsn script successfully
+
+    ## Snapped 3 out of 3 sites to LSN
+
+``` r
+# Now we can perform other operations like calculating upstream distance. 
+edges <- updist_edges(edges, 
+                      save_local = TRUE, lsn_path = "ssn_demo", 
+                      calc_length = TRUE)
+```
+
+    ## 
+    ## 
+    ## Importing relationships.csv table
+
+    ## 
+    ## Identifying outlet segments
+
+    ## Linking edge networks and outlets
+
+    ## Calculating upstream distance
+
+    ## Saving updated edges in ssn_demo
+
+    ## FINISHED updist_edges successfully
