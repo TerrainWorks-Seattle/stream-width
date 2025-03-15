@@ -49,9 +49,9 @@ n$to_nid <- 0
 # make table
 
 # This always hangs... 
-sapply(1:nrow(n), \(x) {
+nothing <- sapply(1:nrow(n), \(x) {
   t = n[NodeNum == n[nid == x]$ToNode]$nid
-  if (length(t) == 0) {print("last!"); t = NA}
+  if (length(t) == 0) {t = NA}
   n[nid == x, to_nid := t]
   return(NULL)
 })
@@ -177,7 +177,7 @@ n$w <- rgamma(length(n$mu), 1/phi, , exp(n$mu)*phi)
 plot(st_as_sf(n)[, 'AREA_SQKM'], pch = 3, cex = .5)
 plot(st_as_sf(n)[, 'psi_area'], pch = 3, cex = .5)
 plot(st_as_sf(n)[, 'psi_mean'], pch = 3, cex = .5)
-plot(st_as_sf(n)[1:100, 'w'], pch = 3, cex= .5)
+plot(st_as_sf(n)[, 'w'], pch = 3, cex = .5)
 ```
 
 Simulate width class at each reach based on simulated widths.  
