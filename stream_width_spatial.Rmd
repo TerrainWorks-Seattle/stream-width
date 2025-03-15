@@ -1,83 +1,16 @@
 ---
 title: "Width class (spatial model)"
-output: html_document
+output: github_document
 ---
 
 ```{r}
 library(sf)
 library(sfnetworks)
-library(SSNbler)
-
-```
-
-```{r}
 library(SSN2)
-library(SSNbler)
 library(ggplot2)
-library(sf)
 
-file.copy(from = system.file("streamsdata", package = "SSNbler"), 
-          to = "mf04", recursive = TRUE, overwrite = FALSE, 
-          copy.mode = FALSE)
-path <- "mf04/streamsdata"
-
-MF_streams <- st_read(paste0(path, "/MF_streams.gpkg"))
-MF_obs <- st_read(paste0(path, "/MF_obs.gpkg"))
-MF_pred1km <- st_read(paste0(path, "/MF_pred1km.gpkg"))
-MF_CapeHorn <- st_read(paste0(path, "/MF_CapeHorn.gpkg"))
-
-
-## Set path for new folder for lsn
-lsn.path <- paste0("mf04")
-
-edges <- lines_to_lsn(
-  streams = MF_streams,
-  lsn_path = lsn.path,
-  check_topology = TRUE,
-  snap_tolerance = 0.05,
-  topo_tolerance = 20,
-  overwrite = TRUE
-)
-obs <- sites_to_lsn(
-  sites = MF_obs,
-  edges = edges,
-  lsn_path = lsn.path,
-  file_name = "obs",
-  snap_tolerance = 100,
-  save_local = TRUE,
-  overwrite = TRUE
-)
 ```
 
-
-Start by converting edges and nodes to SSN object using SSNbler. 
-
-```{r}
-edges <- read_sf("edges_reaches/edges.gpkg")
-# This takes a while and uses a lot of CPU and memory
-# should be able to skip this step because we already have 
-# all the topological information about the network. 
-lsn_path <- "edges_reaches"
-# edges_ssn <- lines_to_lsn(
-#   streams = edges, 
-#   lsn_path = "edges_reaches", 
-#   check_topology = TRUE, 
-#   snap_tolerance = 0.05, 
-#   topo_tolerance = 02, 
-#   overwrite = TRUE
-# )
-
-# alternative way 
-network <- as_sfnetwork(edges)
-# make the required files
-# edges.gpkg
-write_sf(edges_ssn, file.path(lsn_path, "edges.gpkg"))
-# nodes.gpkg
-
-# nodexy.csv
-# noderelationships.csv
-# relationships.csv
-```
 
 Here is an idea about how we might be able to model width and width class 
 where we have both point observations of width and depth, and reach-level 
@@ -92,10 +25,202 @@ $$
 
 $$
 
-Then add observations. 
+Load stream network. Use a small area so that computations aren't too slow. 
 
-```{r}
+```{r load}
+# Fit ssn model to get covariance matrix 
+library(data.table)
+if (!file.exists("streams_clipped/nodes_of_interest.shp")) {
+  nodes <- read_sf("streams_clipped/nodes_testc.shp")
+  st_crs(nodes) <- "EPSG:26911"
+  aoi <- read_sf("ssn_files_keep/ssn_test_region.shp")
+  aoi <- st_transform(aoi, st_crs(nodes))
+  n <- st_intersection(nodes, aoi)
+  write_sf(n, "streams_clipped/nodes_of_interest.shp")
+  rm(nodes)
+} else {
+  n <- read_sf("streams_clipped/nodes_of_interest.shp")
+}
 
+
+setDT(n)
+n$nid <- 1:nrow(n)
+n$to_nid <- 0
+# make table
+
+# This always hangs... 
+sapply(1:nrow(n), \(x) {
+  t = n[NodeNum == n[nid == x]$ToNode]$nid
+  if (length(t) == 0) {print("last!"); t = NA}
+  n[nid == x, to_nid := t]
+  return(NULL)
+})
+# edges
+e <- n[, .(from = nid, to = to_nid)]
+e <- e[!is.na(to)]
+
+# For now just let length = 1 (evenly spaced nodes)
+e$length <- 1
 ```
 
+Create covariance matrix based only on downstream distance. 
+```{r cov-mx}
+library(Matrix)
+# set up
 
+N <- nrow(n)
+# Use contributing area for weights
+
+## Parameters
+# sigma <- 1.3 # variance parameter for x
+# theta <- .04 # autocorrelation parameter
+# alpha = 0 # intercept
+# beta <- .1 # effect of x on width
+# phi <- 20 # variance parameter for y
+
+# simulate multivariate normal from precision matrix
+rmvnorm_prec <-
+function( mu, # estimated fixed and random effects
+          prec, # estimated joint precision
+          n.sims = 1) {
+
+  require(Matrix)
+  # Simulate values
+  z0 = matrix(rnorm(length(mu) * n.sims), ncol=n.sims)
+  # Q = t(P) * L * t(L) * P
+  L = Cholesky(prec, super=TRUE)
+  # Calcualte t(P) * solve(t(L)) * z0 in two steps
+  z = solve(L, z0, system = "Lt") # z = Lt^-1 * z
+  z = solve(L, z, system = "Pt") # z = Pt    * z
+  return(mu + as.matrix(z))
+}
+
+make_stream_cov <- function(edges, 
+                            nodes, 
+                            theta = .04, # autocorrelation parameter
+                            prec = FALSE) {
+  
+  N <- nrow(nodes)
+  # expected covariance
+  # weights matrix
+  A <- sparseMatrix(i=edges$from, 
+                    j=edges$to, 
+                    x=1, 
+                    dims=c(N,N) )
+  sources <- which(colSums(A) < 1)
+  confluences <- which(colSums(A) > 1)
+  weights_mx <- A
+  for (c in confluences) {
+    # from 
+    f <- which(A[, c] == 1)
+    w <- nodes[f, AREA_SQKM]/(sum(nodes[f, AREA_SQKM]))
+    weights_mx[f, c] <- w
+  }
+  # autocorrelation for each path
+  rho_mx <- sparseMatrix(i=edges$from, 
+                         j=edges$to, 
+                         x=1, dims=c(N,N) )
+  
+  # variance contribution to each x
+  var_mx <- sparseMatrix(i=edges$from, 
+                         j=edges$to, 
+                         x=(1-exp(-2*theta*edges$length)), dims=c(N,N) )
+  
+  # path matrix: weights times autocorrelation (element-wise, not mx multiplication)
+  Gamma <- rho_mx * weights_mx
+  
+  # variance: weighted average for each x
+  v <- apply((weights_mx * var_mx), 2, sum)
+  # set variance for initial conditions
+  v[sources] <- 1
+  V <- diag(x=v)
+  v_inv <- diag(x = sqrt(v))
+  
+  # construct precision matrix
+  
+  I <- diag(N)
+  if (prec) {
+    return(Matrix((I-Gamma) %*% v_inv %*% t(I-Gamma), sparse = TRUE))
+  } else {
+    return(Matrix(t(solve(I-Gamma)) %*% V %*% (solve(I-Gamma)), sparse = TRUE))
+  }
+}
+
+# Precision (inverse covariance matrix)
+# which is much sparser and faster.
+Q <- make_stream_cov(e, n, prec = TRUE)
+image(Q)
+# covariance matrix will also be sparse because it is only nonzero for 
+# nodes which are flow-connected. 
+```
+
+Simulate width at each point based on covariance matrix. 
+
+```{r simulate-width}
+set.seed(10161994)
+
+# Two spatial random effects. One which changes the coefficient for 
+# contributing area and one which changes the overall mean. 
+# Each can have different levels of spatial autocorrelation and variance. 
+# It will likely be hard to estimate both but let's see!
+
+# random spatial effect which changes the coefficient for area. 
+psi_area <- rmvnorm_prec(rep(0, dim(Q)[1]), Q)
+# random spatial effect which changes the mean. 
+psi_mean <- rmvnorm_prec(rep(0, dim(Q)[1]), Q)
+n$psi_area <- psi_area
+n$psi_mean <- psi_mean
+n$mu <- -2 + (1.3 + .02*psi_area)*n$AREA_SQKM + .01*psi_mean
+
+phi <- .1
+n$w <- rgamma(length(n$mu), 1/phi, , exp(n$mu)*phi)
+plot(st_as_sf(n)[, 'AREA_SQKM'], pch = 3, cex = .5)
+plot(st_as_sf(n)[, 'psi_area'], pch = 3, cex = .5)
+plot(st_as_sf(n)[, 'psi_mean'], pch = 3, cex = .5)
+plot(st_as_sf(n)[1:100, 'w'], pch = 3, cex= .5)
+```
+
+Simulate width class at each reach based on simulated widths.  
+First get reaches. For now, just use links. 
+
+```{r}
+A <- sparseMatrix(i=e$from, 
+                    j=e$to, 
+                    x=1, 
+                    dims=c(N,N) )
+
+# start with only sources, outlets, and confluences
+sources <- which(colSums(A) == 0)
+outlets <- which(rowSums(A) == 0)
+confluences <- which(colSums(A) == 2)
+
+new_n <- data.table(old_id = c(sources, confluences))
+setorder(new_n, old_id)
+new_n$new_id <- 1:nrow(new_n)
+new_e <- data.table(from = new_n$new_id)
+new_n <- rbind(new_n, data.table(old_id = outlets, new_id = 1:length(outlets) + nrow(new_n)))
+
+get_downstream <- function(id, i = 1, n_list = id) {
+  to = n[id, to_nid]
+  n_list <- c(n_list, to)
+  i = i+1 
+  # id <- to
+  # to %in% c(confluences, outlets)
+  if (to %in% c(confluences, outlets)) {
+    return(list(to = new_n[old_id == to, new_id], i = i, n_list = n_list))
+  } else {
+    get_downstream(to, i, n_list)
+  }
+}
+sets <- lapply(new_n[new_e$from, old_id], get_downstream)
+
+n_sf <- st_as_sf(n)
+new_e$geometry <- lapply(sets, \(s) {st_linestring(st_coordinates(n_sf)[s$n_list, ])}) |> 
+  st_as_sfc()
+new_e$to <- sapply(sets, \(s) s$to)
+new_e$rid <- 1:nrow(new_e)
+new_e <- st_as_sf(new_e)
+
+# Add new edge identifier to old nodes
+
+```
