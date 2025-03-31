@@ -22,10 +22,18 @@ as a spatially continuous variable.
 Width class $C_r$ is a function of all the $w_{s,r}$ over reach $r$. 
 
 $$
-C_r = \frac{1}{n_r}\sum_{i = 1}^{n_r} w_{i,r}\\
-w_{s,r} \sim gamma(\mu, \phi) \\
-log(\mu) = a_0 +\gamma_{s,r} + (a_1 + \psi_{s,r})x_{s,r}\\
-\psi_{s,r} \sim MVN(0, R)\\
+C_r = \frac{1}{n_r}\sum_{i = 1}^{n_r} w_{i,r}
+$$
+$$
+w_{s,r} \sim gamma(\mu, \phi)
+$$
+$$
+log(\mu) = a_0 +\gamma_{s,r} + (a_1 + \psi_{s,r})x_{s,r}
+$$
+$$
+\psi_{s,r} \sim MVN(0, R)
+$$
+$$
 \gamma_{s,r} \sim MVN(0, S)
 $$
 
@@ -465,50 +473,49 @@ abline(0, 1, col = "red", lwd = 2)
 
 
 
-Both models do a good job of estimating parameters. 
-
-True intercept = -3.  
-True slope = 3.
-
-```{r}
-summary(width_model)
-summary(ssn_mod)
-```
-
 Fit the same model using TMB (it should look the same)
 
 ```{r}
+# save observations for iterating
+obs <- copy(n)
+obs[!.(w_obs$nid), w:= NA]
+# saveRDS(obs, "obs_tmp.rds")
+# saveRDS(e, "e_tmp.rds")
+```
+
+```{r}
 # Tail-up model
+
+# obs <- readRDS("obs_tmp.rds")
+# e <- readRDS("e_tmp.rds")
 library(TMB)
 # unlink("ssn_tmb/ssn_exponential_prec.dll")
 # unlink("ssn_tmb/ssn_exponential_prec.o")
-# compile( "ssn_tmb/ssn_exponential_prec.cpp" )
+compile( "ssn_tmb/ssn_exponential_prec.cpp" )
 dyn.load( dynlib("ssn_tmb/ssn_exponential_prec") )
 
 Params <- list(
-  logtheta1 =-2, # autocorrelation parameter (tailup)
-  #logtheta2 = 0, # autocorrelation parameter (taildown)
+  logtheta_up = -5, # autocorrelation parameter (tailup)
+  logtheta_dn = -5, # autocorrelation parameter (taildown)
   logphi = -2, # variance parameter for y
   beta0 = -1, # intercept
   beta1 = 1, # effect of x on y
-  gamma1 = 1, # effect of spatial effect 1 on y 
-  #gamma2 = 1, # effect of spatial effect 2 on y
-  psi1_n = rnorm(nrow(n)) # spatial random effect 1
-  #psi2_n = rnorm(nrow(n)) # spatial random effect 2
+  gamma_up = 1, # effect of spatial effect 1 on y 
+  gamma_dn = 1, # effect of spatial effect 2 on y
+  psi_up_n = rnorm(nrow(obs)), # spatial random effect 1
+  psi_dn_n = rnorm(nrow(obs)) # spatial random effect 2
 )
 
-obs <- copy(n)
-obs[!.(w_obs$nid), w:= NA]
 Data <- list(
   y_n = obs$w,
   x_n = obs$AREA_SQKM,
   from_e = e$from -1, # index from 0
   to_e = e$to -1, # index from 0
   dist_e = e$length,
-  flow_n = n$AREA_SQKM
+  flow_n = obs$AREA_SQKM
 )
 
-Random <- c("psi1_n")
+Random <- c("psi_up_n", "psi_dn_n")
 
 Obj <- MakeADFun(data = Data, 
                  parameters = Params,
@@ -530,10 +537,16 @@ abline(0, 1, col = "red", lwd = 2)
 
 ```
 
+Look at some basic model diagnostics. 
 
-Calculate MSPE and compare between models
+All models do a good job of estimating parameters. 
+TMB fit is a bit off for some reason. 
 
-```{r mspe}
+True intercept = -3.  
+True slope = 3.
+
+```{r}
+
 
 preds$tmb_pred <- rep$mu_n
 oos <- preds[!preds$nid %in% w_obs$nid, ]
@@ -544,11 +557,28 @@ mspe_ssn <- sum( (oos$w - oos$predicted)^2/nrow(oos) )
 mspe_tmb <- sum( (oos$w - oos$tmb_pred)^2/nrow(oos) )
 
 
-data.table(
+data.frame(
   model = c("linear", "ssn", "tmb"), 
+  intercept = c(coef(ssn_mod)[[1]], 
+                coef(width_model)[[1]], 
+                rep$beta0), 
+  slope = c(coef(ssn_mod)[[2]], 
+            coef(width_model)[[2]], 
+            rep$beta1), 
   MSPE = c(mspe_lm, mspe_ssn, mspe_tmb)
 ) |> knitr::kable()
+
 ```
+
+```{r}
+ggplot(st_as_sf(n)) + 
+  geom_sf(aes(color= rep$psi_up_n)) + 
+  ggtitle("Tailup effect (estimated)")
+ggplot(st_as_sf(n)) + 
+  geom_sf(aes(color = rep$psi_dn_n)) + 
+  ggtitle("Taildown effect (estimated)")
+```
+
 
 Fit integrated model using both width class and point width observations
 

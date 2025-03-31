@@ -28,10 +28,14 @@ continuous variable. Width class $C_r$ is a function of all the
 $w_{s,r}$ over reach $r$.
 
 $$
-C_r = \frac{1}{n_r}\sum_{i = 1}^{n_r} w_{i,r}\\
-w_{s,r} \sim gamma(\mu, \phi) \\
-log(\mu) = a_0 +\gamma_{s,r} + (a_1 + \psi_{s,r})x_{s,r}\\
-\psi_{s,r} \sim MVN(0, R)\\
+C_r = \frac{1}{n_r}\sum_{i = 1}^{n_r} w_{i,r}
+$$ $$
+w_{s,r} \sim gamma(\mu, \phi)
+$$ $$
+log(\mu) = a_0 +\gamma_{s,r} + (a_1 + \psi_{s,r})x_{s,r}
+$$ $$
+\psi_{s,r} \sim MVN(0, R)
+$$ $$
 \gamma_{s,r} \sim MVN(0, S)
 $$
 
@@ -566,73 +570,24 @@ abline(0, 1, col = "red", lwd = 2)
 
 ![](stream_width_spatial_files/figure-gfm/unnamed-chunk-7-4.png)<!-- -->
 
-Both models do a good job of estimating parameters.
-
-True intercept = -3.  
-True slope = 3.
-
-``` r
-summary(width_model)
-```
-
-    ## 
-    ## Call:
-    ## glm(formula = w ~ AREA_SQKM, family = Gamma(link = "log"), data = w_obs)
-    ## 
-    ## Coefficients:
-    ##             Estimate Std. Error t value Pr(>|t|)    
-    ## (Intercept) -3.02048    0.05249  -57.55  < 2e-16 ***
-    ## AREA_SQKM    2.69841    0.26234   10.29 9.98e-14 ***
-    ## ---
-    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-    ## 
-    ## (Dispersion parameter for Gamma family taken to be 0.1151191)
-    ## 
-    ##     Null deviance: 25.6212  on 49  degrees of freedom
-    ## Residual deviance:  4.7344  on 48  degrees of freedom
-    ## AIC: -254.08
-    ## 
-    ## Number of Fisher Scoring iterations: 4
-
-``` r
-summary(ssn_mod)
-```
-
-    ## 
-    ## Call:
-    ## ssn_glm(formula = w ~ AREA_SQKM, ssn.object = reaches_ssn, family = "Gamma", 
-    ##     tailup_type = "exponential", taildown_type = "exponential", 
-    ##     additive = "afvArea")
-    ## 
-    ## Deviance Residuals:
-    ##        Min         1Q     Median         3Q        Max 
-    ## -0.0097387 -0.0035830 -0.0004213  0.0023208  0.0140213 
-    ## 
-    ## Coefficients (fixed):
-    ##             Estimate Std. Error z value Pr(>|z|)    
-    ## (Intercept)  -3.0127     0.1289  -23.38   <2e-16 ***
-    ## AREA_SQKM     2.8142     0.2651   10.61   <2e-16 ***
-    ## ---
-    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-    ## 
-    ## Pseudo R-squared: 0.7095
-    ## 
-    ## Coefficients (covariance):
-    ##                 Effect     Parameter   Estimate
-    ##     tailup exponential  de (parsill)  2.307e-03
-    ##     tailup exponential         range  2.952e+03
-    ##   taildown exponential  de (parsill)  7.968e-02
-    ##   taildown exponential         range  5.030e+02
-    ##                 nugget        nugget  5.822e-02
-    ##             dispersion    dispersion  6.892e+02
-
 Fit the same model using TMB (it should look the same)
 
 ``` r
+# save observations for iterating
+obs <- copy(n)
+obs[!.(w_obs$nid), w:= NA]
+# saveRDS(obs, "obs_tmp.rds")
+# saveRDS(e, "e_tmp.rds")
+```
+
+``` r
 # Tail-up model
+
+# obs <- readRDS("obs_tmp.rds")
+# e <- readRDS("e_tmp.rds")
 library(TMB)
-unlink("ssn_tmb/ssn_exponential_prec.dll")
-unlink("ssn_tmb/ssn_exponential_prec.o")
+# unlink("ssn_tmb/ssn_exponential_prec.dll")
+# unlink("ssn_tmb/ssn_exponential_prec.o")
 compile( "ssn_tmb/ssn_exponential_prec.cpp" )
 ```
 
@@ -644,29 +599,27 @@ compile( "ssn_tmb/ssn_exponential_prec.cpp" )
 dyn.load( dynlib("ssn_tmb/ssn_exponential_prec") )
 
 Params <- list(
-  logtheta1 =-2, # autocorrelation parameter (tailup)
-  #logtheta2 = 0, # autocorrelation parameter (taildown)
+  logtheta_up = -5, # autocorrelation parameter (tailup)
+  logtheta_dn = -5, # autocorrelation parameter (taildown)
   logphi = -2, # variance parameter for y
   beta0 = -1, # intercept
   beta1 = 1, # effect of x on y
-  gamma1 = 1, # effect of spatial effect 1 on y 
-  #gamma2 = 1, # effect of spatial effect 2 on y
-  psi1_n = rnorm(nrow(n)) # spatial random effect 1
-  #psi2_n = rnorm(nrow(n)) # spatial random effect 2
+  gamma_up = 1, # effect of spatial effect 1 on y 
+  gamma_dn = 1, # effect of spatial effect 2 on y
+  psi_up_n = rnorm(nrow(obs)), # spatial random effect 1
+  psi_dn_n = rnorm(nrow(obs)) # spatial random effect 2
 )
 
-obs <- copy(n)
-obs[!.(w_obs$nid), w:= NA]
 Data <- list(
   y_n = obs$w,
   x_n = obs$AREA_SQKM,
   from_e = e$from -1, # index from 0
   to_e = e$to -1, # index from 0
   dist_e = e$length,
-  flow_n = n$AREA_SQKM
+  flow_n = obs$AREA_SQKM
 )
 
-Random <- c("psi1_n")
+Random <- c("psi_up_n", "psi_dn_n")
 
 Obj <- MakeADFun(data = Data, 
                  parameters = Params,
@@ -694,7 +647,13 @@ abline(0, 1, col = "red", lwd = 2)
 
 ![](stream_width_spatial_files/figure-gfm/unnamed-chunk-9-2.png)<!-- -->
 
-Calculate MSPE and compare between models
+Look at some basic model diagnostics.
+
+All models do a good job of estimating parameters. TMB fit is a bit off
+for some reason.
+
+True intercept = -3.  
+True slope = 3.
 
 ``` r
 preds$tmb_pred <- rep$mu_n
@@ -706,16 +665,38 @@ mspe_ssn <- sum( (oos$w - oos$predicted)^2/nrow(oos) )
 mspe_tmb <- sum( (oos$w - oos$tmb_pred)^2/nrow(oos) )
 
 
-data.table(
+data.frame(
   model = c("linear", "ssn", "tmb"), 
+  intercept = c(coef(ssn_mod)[[1]], 
+                coef(width_model)[[1]], 
+                rep$beta0), 
+  slope = c(coef(ssn_mod)[[2]], 
+            coef(width_model)[[2]], 
+            rep$beta1), 
   MSPE = c(mspe_lm, mspe_ssn, mspe_tmb)
 ) |> knitr::kable()
 ```
 
-| model  |      MSPE |
-|:-------|----------:|
-| linear | 0.0021159 |
-| ssn    | 0.0017568 |
-| tmb    | 0.0113508 |
+| model  | intercept |    slope |      MSPE |
+|:-------|----------:|---------:|----------:|
+| linear | -3.012711 | 2.814191 | 0.0021159 |
+| ssn    | -3.020479 | 2.698406 | 0.0017568 |
+| tmb    | -3.073445 | 2.778142 | 0.0113242 |
+
+``` r
+ggplot(st_as_sf(n)) + 
+  geom_sf(aes(color= rep$psi_up_n)) + 
+  ggtitle("Tailup effect (estimated)")
+```
+
+![](stream_width_spatial_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
+
+``` r
+ggplot(st_as_sf(n)) + 
+  geom_sf(aes(color = rep$psi_dn_n)) + 
+  ggtitle("Taildown effect (estimated)")
+```
+
+![](stream_width_spatial_files/figure-gfm/unnamed-chunk-11-2.png)<!-- -->
 
 Fit integrated model using both width class and point width observations
