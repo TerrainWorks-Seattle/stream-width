@@ -3,3 +3,4 @@ streams_clipped
 .Rproj.user
 *.o
 *.dll
+.Rhistory
