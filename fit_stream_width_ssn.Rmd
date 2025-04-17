@@ -119,13 +119,19 @@ It will likely be faster to do this when exporting the synthetic network, but
 that functionality does not exist yet so I will just do it here. 
 
 ```{r}
-
-```
-
-```{r}
 library(Matrix)
 # Create adjacency matrix
 # first need to index nodes from 1:n
+
+make_A <- function(n_dt, N) {
+  e <- n_dt[, .(from = nid, to = to_nid)]
+  e <- e[!is.na(to)]
+  
+  sparseMatrix(i = e$from, 
+               j = e$to, 
+               x = 1, 
+               dims = c(N, N))
+}
 n <- as.data.table(nodes)
 setkey(n, NodeNum)
 n$nid <- 1:nrow(n)
@@ -135,33 +141,54 @@ n$nid <- 1:nrow(n)
 n$to_nid <- n[.(ToNode), nid]
 setkey(n, nid)
 N <- nrow(n)
+A <- make_A(n, N)
 
-# edges
-# This uses data.table's fast sort with keys to 
-e <- n[, .(from = nid, to = to_nid)]
-e <- e[!is.na(to)]
+# SSN does not allow confluences of more than two streams. Where this happens, 
+# make one of them (the one with the smallest contributing area to avoid editing
+# the main channel) converge one node farther down the network
+complex_confluences <- which(colSums(A) == 3)
 
+for (c in complex_confluences) {
+  from_n <- n[to_nid == c]
+  n[.(from_n[which.min(from_n$AREA_SQKM), nid]),  to_nid := n[.(c), to_nid]]
+}
 
-A <- sparseMatrix(i=e$from, 
-                  j=e$to, 
-                  x=1, 
-                  dims=c(N,N) )
 
 # start with only sources, outlets, and confluences
 sources <- which(colSums(A) == 0)
 outlets <- which(rowSums(A) == 0)
 confluences <- which(colSums(A) == 2)
 
+# now make sure that there are no outlets which are also confluences. 
+converging <- outlets[outlets %in% confluences]
+
+
+
+# Move the smaller one up one for each of these
+for (c in converging) {
+  from_n <- n[to_nid == c]
+  n[.(from_n[which.min(from_n$AREA_SQKM), nid]), 
+    to_nid := from_n[which.max(from_n$AREA_SQKM), nid]]
+}
+
+A <- make_A(n, N)
+ 
+
 
 # create new data tables which will hold info for reduced network
 
-# Start with node ids for only sources and confluences. Each of these 
-# will correspond to one edge. There may be some confluences which are 
-# also outlets. DO NOT include these because they won't have a downstream 
-# edge associated with them. 
+# start with only sources, outlets, and confluences
+sources <- which(colSums(A) == 0)
+outlets <- which(rowSums(A) == 0)
+confluences <- which(colSums(A) == 2)
 
-c <- confluences[!confluences %in% outlets]
-new_n <- data.table(old_id = c(sources, c))
+# exclude sources with 0 contributing area
+sources <- n[!nid %in% sources & AREA_SQKM > 0]$nid
+
+# Start with node ids for only sources and confluences. Each of these 
+# will correspond to one edge. 
+
+new_n <- data.table(old_id = c(sources, confluences))
 setorder(new_n, old_id)
 new_n$new_id <- 1:nrow(new_n)
 new_e <- data.table(from = new_n$new_id)
@@ -215,6 +242,8 @@ area_weights <- parLapply(cl, sets, \(s) {
 })
 new_e$area_weight <- unlist(area_weights)
 
+new_e$length <- unlist(lapply(sets, \(s) s$i))
+
 new_e$to <- sapply(sets, \(s) s$to)
 new_e$rid <- 1:nrow(new_e)
 new_e <- st_as_sf(new_e, crs = st_crs(reaches))
@@ -235,8 +264,10 @@ stopCluster(cl)
 library(SSN2)
 library(SSNbler)
 
-# predict at center(ish) node for each edge
-pred_points <- st_as_sf(n[.(unlist(new_e$center_nid))])
+# predict at center(ish) node for each edge. 
+# No predictions for edges only one node length long
+setkey(n, NodeNum)
+pred_points <- st_as_sf(n[.(new_e[new_e$length > 2, ]$center_nodenum)])
 
 # set observation points as center point from each reach
 # https://gis.stackexchange.com/questions/254151/how-to-find-the-center-point-which-lies-on-the-linestring-geometry 
@@ -245,18 +276,23 @@ reach_obs <- reaches[!is.na(reaches$CLASS), ]
 reach_obs$geometry <- st_line_interpolate(st_geometry(reach_obs), 0.5, normalized = TRUE)
 reach_obs
 
+
+lsn.path <- file.path("ssn_files_keep", "lsn")
+edges <- lines_to_lsn(
+  streams = st_as_sf(as.data.frame(new_e), crs = st_crs(new_e)),
+  lsn_path = lsn.path,
+  check_topology = TRUE,
+  snap_tolerance = .1,
+  topo_tolerance = .5,
+  overwrite = TRUE
+)
+
+errors <- read_sf("ssn_files_keep/lsn/node_errors.gpkg")
+
 # Need to convert from data.table to data.frame (weird bugs happen otherwise)
 if (!dir.exists("ssn_files_keep/ssn.ssn")) {
-  lsn.path <- file.path(tempdir(), "stream_width")
   
-  edges <- lines_to_lsn(
-    streams = st_as_sf(as.data.frame(new_e), crs = st_crs(new_e)),
-    lsn_path = lsn.path,
-    check_topology = TRUE,
-    snap_tolerance = 1,
-    topo_tolerance = 20,
-    overwrite = TRUE
-  )
+
   obs <- sites_to_lsn(
     sites = st_as_sf(reach_obs, crs = st_crs(reach_obs)),
     edges = edges,

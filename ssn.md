@@ -17,7 +17,7 @@ documentation](https://pet221.github.io/SSNbler/articles/introduction.html)
 and in the figure below:
 
 <figure>
-<img src="ssn_files_keep/valid_nodes.png" alt="LSN" />
+<img src="ssn_files/valid_nodes.png" alt="LSN" />
 <figcaption aria-hidden="true">LSN</figcaption>
 </figure>
 
@@ -67,7 +67,7 @@ downstream divergences are not allowed.
 library(sf)
 ```
 
-    ## Linking to GEOS 3.12.1, GDAL 3.8.4, PROJ 9.3.1; sf_use_s2() is TRUE
+    ## Linking to GEOS 3.9.3, GDAL 3.5.2, PROJ 8.2.1; sf_use_s2() is TRUE
 
 ``` r
 nodexy <- data.frame(
@@ -204,7 +204,7 @@ edges <- lines_to_lsn(
     ## 
     ## 0 topology errors identified. node_errors.gpkg not written to file.
     ## 
-    ## 2 Outlets found. Visually check nodecat == Outlet locations in ssn_demo/nodes.gpkg and correct errors if found.
+    ## 2 outlets found. Visually check nodecat == Outlet locations in ssn_demo/nodes.gpkg and correct errors if found.
 
 ``` r
 obs <- sites_to_lsn(

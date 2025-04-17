@@ -4,3 +4,4 @@ streams_clipped
 *.o
 *.dll
 .Rhistory
+data

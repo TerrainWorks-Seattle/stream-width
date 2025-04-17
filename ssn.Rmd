@@ -16,7 +16,7 @@ include pseudonodes to break up reaches. These different node types are
 described in the [SSNbler documentation](https://pet221.github.io/SSNbler/articles/introduction.html)
  and in the figure below: 
 
-![LSN](ssn_files_keep/valid_nodes.png)
+![LSN](ssn_files/valid_nodes.png)
 
 The LSN includes the following files: 
 
