@@ -6,9 +6,7 @@ format: gfm
 editor: visual
 ---
 
-
-Step 1: 
-Load the data
+Step 1: Load the data
 
 ```{r load}
 library(sf)
@@ -35,15 +33,11 @@ nodes_matched <- st_join(nodes, reaches[c("REACH_ID")], all.x = TRUE, all.y = FA
 names(reaches)
 ```
 
-# fit a linear model. 
+# fit a linear model.
 
-Here I fit both a binomial model and an ordinal model to compare outcomes. 
+Here I fit both a binomial model and an ordinal model to compare outcomes.
 
-Note that binomial regression is generally used for a somewhat different 
-scenario. It assumes that your response is a binomial random variable, which 
-models the number of successes out of n trials where the probability of success 
-for each trial is p. Binomial regression assumes that p varies with covariates, 
-such that 
+Note that binomial regression is generally used for a somewhat different scenario. It assumes that your response is a binomial random variable, which models the number of successes out of n trials where the probability of success for each trial is p. Binomial regression assumes that p varies with covariates, such that
 
 ```{r}
 data <- as.data.table(reaches[!is.na(reaches$CLASS), ])
@@ -79,13 +73,11 @@ hist(response[, 1])
 
 ```
 
-### Compare model predictions. 
-They are similar. For some reason ordinal regression is never predicting class 2. 
-Some model fit stats are shown below, and a confusion matrix where the "reference" 
-is the ordinal regression predictions and "prediction" is binomial predictions. 
+### Compare model predictions.
 
-The binomial model tends to predict lower than ordinal regression and never 
-predicts higher than ordinal regression. 
+They are similar. For some reason ordinal regression is never predicting class 2. Some model fit stats are shown below, and a confusion matrix where the "reference" is the ordinal regression predictions and "prediction" is binomial predictions.
+
+The binomial model tends to predict lower than ordinal regression and never predicts higher than ordinal regression.
 
 ```{r validate}
 library(caret)
@@ -114,255 +106,114 @@ confusionMatrix(as.factor(validation$pred_bin), as.factor(validation$pred_ord))
 
 # Fit a spatial model
 
-To do this, I first need to create a data structure which SSN can use. 
-It will likely be faster to do this when exporting the synthetic network, but 
-that functionality does not exist yet so I will just do it here. 
+Load and explore the .ssn object. 
+The torgegram shows the semivariance for three different types of distance:  
+- flowcon: stream distance betweeen flow-connected points
+- flowuncon: stream distance between all (flow-connected and -unconnected points)
+- euclid: Euclidean distance
+
+The scale of variance seems to be different between flow-connected points and 
+others, so we will plot them separately. 
 
 ```{r}
-library(Matrix)
-# Create adjacency matrix
-# first need to index nodes from 1:n
-
-make_A <- function(n_dt, N) {
-  e <- n_dt[, .(from = nid, to = to_nid)]
-  e <- e[!is.na(to)]
-  
-  sparseMatrix(i = e$from, 
-               j = e$to, 
-               x = 1, 
-               dims = c(N, N))
-}
-n <- as.data.table(nodes)
-setkey(n, NodeNum)
-n$nid <- 1:nrow(n)
-# connect to downstream node using new ids
-# This uses the data.table key to find the row where NodeNum == ToNode, then get 
-# the new nid, and assign that to a new to_nid column
-n$to_nid <- n[.(ToNode), nid]
-setkey(n, nid)
-N <- nrow(n)
-A <- make_A(n, N)
-
-# SSN does not allow confluences of more than two streams. Where this happens, 
-# make one of them (the one with the smallest contributing area to avoid editing
-# the main channel) converge one node farther down the network
-complex_confluences <- which(colSums(A) == 3)
-
-for (c in complex_confluences) {
-  from_n <- n[to_nid == c]
-  n[.(from_n[which.min(from_n$AREA_SQKM), nid]),  to_nid := n[.(c), to_nid]]
-}
-
-
-# start with only sources, outlets, and confluences
-sources <- which(colSums(A) == 0)
-outlets <- which(rowSums(A) == 0)
-confluences <- which(colSums(A) == 2)
-
-# now make sure that there are no outlets which are also confluences. 
-converging <- outlets[outlets %in% confluences]
-
-
-
-# Move the smaller one up one for each of these
-for (c in converging) {
-  from_n <- n[to_nid == c]
-  n[.(from_n[which.min(from_n$AREA_SQKM), nid]), 
-    to_nid := from_n[which.max(from_n$AREA_SQKM), nid]]
-}
-
-A <- make_A(n, N)
- 
-
-
-# create new data tables which will hold info for reduced network
-
-# start with only sources, outlets, and confluences
-sources <- which(colSums(A) == 0)
-outlets <- which(rowSums(A) == 0)
-confluences <- which(colSums(A) == 2)
-
-# exclude sources with 0 contributing area
-sources <- n[!nid %in% sources & AREA_SQKM > 0]$nid
-
-# Start with node ids for only sources and confluences. Each of these 
-# will correspond to one edge. 
-
-new_n <- data.table(old_id = c(sources, confluences))
-setorder(new_n, old_id)
-new_n$new_id <- 1:nrow(new_n)
-new_e <- data.table(from = new_n$new_id)
-new_n <- rbind(new_n, data.table(old_id = outlets, new_id = 1:length(outlets) + nrow(new_n)))
-
-
-# For each source or confluence node, get all nodes between it and the next 
-# downstream confluence or outlet
-
-# This takes a while for all 28k or so points so let's do it in parallel. 
-library(parallel)
-n_cores <- detectCores()
-cl <- makeCluster(n_cores)
-clusterEvalQ(cl, {
-  library(data.table)
-})
-
-get_downstream <- function(id, i = 1, n_list = id) {
-  to = n[id, to_nid]
-  n_list <- c(n_list, to)
-  i = i+1 
-  # id <- to
-  # to %in% c(confluences, outlets)
-  if (to %in% c(confluences, outlets)) {
-    return(list(to = new_n[old_id == to, new_id], i = i, n_list = n_list))
-  } else {
-    get_downstream(to, i, n_list)
-  }
-}
-
-
-clusterExport(cl, c("n", "confluences", "outlets", "new_n", "get_downstream"))
-
-sets <- parLapply(cl, new_n[new_e$from, old_id], get_downstream)
-
-
-# Now use the list of nodes associated with each edge to get geometry for the 
-# edge. 
-n_sf <- st_as_sf(n)
-clusterExport(cl, "n_sf")
-clusterEvalQ(cl, {
-  library(sf)
-})
-
-geometryList <- parLapply(cl, sets, \(s) {st_linestring(st_coordinates(n_sf)[s$n_list, ])}) 
-
-new_e$geometry <- st_as_sfc(geometryList)
-# record contributing area at most downstream point to use for SSN weighting
-area_weights <- parLapply(cl, sets, \(s) {
-  n[nid == s$n_list[length(s$n_list) - 1], AREA_SQKM]
-})
-new_e$area_weight <- unlist(area_weights)
-
-new_e$length <- unlist(lapply(sets, \(s) s$i))
-
-new_e$to <- sapply(sets, \(s) s$to)
-new_e$rid <- 1:nrow(new_e)
-new_e <- st_as_sf(new_e, crs = st_crs(reaches))
-
-# get nids so we can get info from nodes table later
- 
-setkey(new_n, new_id)
-new_e$from_nodenum <- n[.(new_n[.(new_e$from), old_id]), NodeNum]
-new_e$to_nodenum <- n[.(new_n[.(new_e$to), old_id]), NodeNum]
-
-# get nids of center node of edge for predictions
-new_e$center_nodenum <- n[.(unlist(lapply(sets, \(s) s$n_list[round(s$i/2)]))), NodeNum]
-
-stopCluster(cl)
-```
-
-```{r make_ssn}
 library(SSN2)
-library(SSNbler)
-
-# predict at center(ish) node for each edge. 
-# No predictions for edges only one node length long
-setkey(n, NodeNum)
-pred_points <- st_as_sf(n[.(new_e[new_e$length > 2, ]$center_nodenum)])
-
-# set observation points as center point from each reach
-# https://gis.stackexchange.com/questions/254151/how-to-find-the-center-point-which-lies-on-the-linestring-geometry 
-reach_obs <- reaches[!is.na(reaches$CLASS), ]
-
-reach_obs$geometry <- st_line_interpolate(st_geometry(reach_obs), 0.5, normalized = TRUE)
-reach_obs
-
-
-lsn.path <- file.path("ssn_files_keep", "lsn")
-edges <- lines_to_lsn(
-  streams = st_as_sf(as.data.frame(new_e), crs = st_crs(new_e)),
-  lsn_path = lsn.path,
-  check_topology = TRUE,
-  snap_tolerance = .1,
-  topo_tolerance = .5,
+ssn <-  ssn_import(
+  path = "data/ssn_files_keep/ssn.ssn",
+  predpts = c("preds"), 
   overwrite = TRUE
 )
 
-errors <- read_sf("ssn_files_keep/lsn/node_errors.gpkg")
+tg_connected <- Torgegram(
+  formula = CLASS ~ log10(AREA_SQKM) + GRADIENT,
+  ssn.object = ssn,
+  type = c("flowcon")
+)
+plot(tg_connected)
+tg_unconnected <- Torgegram(
+  formula = CLASS ~ log10(AREA_SQKM) + GRADIENT,
+  ssn.object = ssn,
+  type = c("flowuncon", "euclid")
+)
+plot(tg_unconnected)
+```
 
-# Need to convert from data.table to data.frame (weird bugs happen otherwise)
-if (!dir.exists("ssn_files_keep/ssn.ssn")) {
-  
+There clearly is increasing variance between flow-connected points. I don't really see this pattern in flow-unconnected points but there is some increasing variance between euclidan distance. 
+This indicates that a tail-up variance component would be appropriate, and potentially also a component 
+for euclidean distance.
 
-  obs <- sites_to_lsn(
-    sites = st_as_sf(reach_obs, crs = st_crs(reach_obs)),
-    edges = edges,
-    lsn_path = lsn.path,
-    file_name = "obs",
-    snap_tolerance = 1,
-    save_local = TRUE,
-    overwrite = TRUE
-  )
-  preds <- sites_to_lsn(
-    sites = st_as_sf(as.data.frame(pred_points), crs = st_crs(pred_points)),
-    edges = edges,
-    save_local = TRUE,
-    lsn_path = lsn.path,
-    file_name = "pred",
-    snap_tolerance = 1,
-    overwrite = TRUE
-  )
-  
-  edges <- updist_edges(
-    edges = edges,
-    save_local = TRUE,
-    lsn_path = lsn.path,
-    calc_length = TRUE
-  )
-  
-  site.list <- updist_sites(
-    sites = list(
-      obs = obs,
-      preds = preds
-    ),
-    edges = edges,
-    length_col = "Length",
-    save_local = TRUE,
-    lsn_path = lsn.path
-  )
-  
-  edges <- afv_edges(
-    edges = edges,
-    infl_col = "area_weight",
-    segpi_col = "areaPI",
-    afv_col = "afvArea",
-    lsn_path = lsn.path
-  )
-  
-  site.list <- afv_sites(
-    sites = site.list,
-    edges = edges,
-    afv_col = "afvArea",
-    save_local = TRUE,
-    lsn_path = lsn.path
-  )
-  reaches_ssn <- ssn_assemble(
-    edges = edges,
-    lsn_path = lsn.path,
-    obs_sites = site.list$obs,
-    preds_list = site.list[c("preds")],
-    ssn_path = "ssn_files_keep/ssn",
-    import = TRUE,
-    check = TRUE,
-    afv_col = "afvArea",
-    overwrite = TRUE
-  )
-} else {
-  reaches_ssn <- ssn_import("ssn_files_keep/ssn.ssn", predpts = "preds", overwrite = TRUE)
-}
+Unfortunately, I am getting an error when I attempt to fit a tail-up spatial effect. I'm not 
+sure why, but it may be related to the large number of separated networks. Instead, let's fit a 
+tail-down effect. 
+
+```{r}
+# this took about 30 min
+ssn_mod_binom <- ssn_glm(
+  matrix(c(CLASS, 3-CLASS), ncol = 2) ~ AREA_SQKM_log10 + GRADIENT, 
+                   family = "binomial",
+                   ssn,  
+                   taildown_type = "exponential",
+                   additive = "afvArea")
+
+# ssn_mod_binom <- ssn_glm(CLASS ~ log10(AREA_SQKM) + GRADIENT, 
+#                    family = "binomial",
+#                    size = 3,
+#                    ssn,  
+#                    taildown_type = "exponential",
+#                    additive = "afvArea")
+# t3 <- Sys.time()
+# ssn_mod_gamma <- ssn_glm(CLASS ~ log10(AREA_SQKM) + GRADIENT, 
+#                          family = "gamma",
+#                          ssn,  
+#                          taildown_type = "exponential",
+#                          additive = "afvArea")
+
 
 ```
 
+```{r}
+summary(ssn_mod_binom)
+```
 
+Parameter estimates are pretty different between the spatial and non-spatial binomial models. 
+Let's look at fitted values. 
 
+```{r}
+# for some reason they get transformed to be between 0 and 3 
+# when you say type = "response"
+p_fitted_ssn <- plogis(fitted(ssn_mod_binom, type = "link"))
+f_ssn <- sapply(p_fitted_ssn, \(p) dbinom(0:3, size = 3, prob = p)) |> t()
+preds_ssn <- sapply(p_fitted_ssn, \(p) which.max(dbinom(0:3, size = 3, prob = p)))
 
+hist(preds_ssn)
+boxplot(p_fitted_ssn ~ ssn$obs$CLASS)
 
+ssn_mx <- confusionMatrix(as.factor(ssn$obs$CLASS), as.factor(preds_ssn -1))
+sqrt(mean((ssn$obs$CLASS - (preds_ssn -1))^2))
+
+knitr::kable(data.table(
+  model = c("Binomial", "Ordinal logistic", "SSN (binomial)"), 
+  RMSE = c(sqrt(mean((validation$obs - validation$pred_bin)^2)), 
+           sqrt(mean((validation$obs - as.numeric(validation$pred_ord))^2)), 
+           sqrt(mean((ssn$obs$CLASS - (preds_ssn -1))^2))), 
+  accuracy = c(
+    mx_ord$overall["Accuracy"],
+    mx_bin$overall["Accuracy"], 
+    ssn_mx$overall["Accuracy"])
+))
+```
+
+This is a pretty significant improvement in fitted values. However, it is not perfect, despite 
+the spatial fitting we are doing. There are likely a couple of reasons. The first is that 
+the spatial smoothing that is included in the model fit is a smoother, it doesn't snap values 
+exactly to observations. The second is the type of model we are using. We are using binomial 
+regression, which is different from ordinal regression but can be fit to data which looks similar 
+(integer data within a set range). Rather than predict an ordinal class, binomial regression predicts 
+a probability. We can then translate that probability into a predicted number, but that's not really 
+what it's designed for. 
+
+Another implication of using binomial rather than ordinal regression is that it will be difficult to 
+get sensible estimates of uncertainty from the model output. We can use uncertainty estimates for regression parameters but there is no variance or dispersion parameter in binomial regression which 
+can be fit to describe variation around the predicted mean. Quasi-binomial (which is built in to the 
+glm function) or ordinal regression does fit a dispersion parameter. Without modifying the SSN2 
+codebase to allow fitting ordinal or quasibinomial models, we might be able to back out a bootstrapped 
+estimate of prediction uncertianty. 
