@@ -2,8 +2,8 @@
 title: "Fit width class data using SSN"
 author: "Helen"
 date: today
-format: gfm
-editor: visual
+output: github_document
+editor: source
 ---
 
 Step 1: Load the data
@@ -39,7 +39,7 @@ Here I fit both a binomial model and an ordinal model to compare outcomes.
 
 Note that binomial regression is generally used for a somewhat different scenario. It assumes that your response is a binomial random variable, which models the number of successes out of n trials where the probability of success for each trial is p. Binomial regression assumes that p varies with covariates, such that
 
-```{r}
+```{r fit-nonspatial-models}
 data <- as.data.table(reaches[!is.na(reaches$CLASS), ])
 
 # Start with ordinal regression 
@@ -115,7 +115,7 @@ The torgegram shows the semivariance for three different types of distance:
 The scale of variance seems to be different between flow-connected points and 
 others, so we will plot them separately. 
 
-```{r}
+```{r load-ssn}
 library(SSN2)
 ssn <-  ssn_import(
   path = "data/ssn_files_keep/ssn.ssn",
@@ -145,10 +145,10 @@ Unfortunately, I am getting an error when I attempt to fit a tail-up spatial eff
 sure why, but it may be related to the large number of separated networks. Instead, let's fit a 
 tail-down effect. 
 
-```{r}
+```{r fit-ssn}
 # this took about 30 min
 ssn_mod_binom <- ssn_glm(
-  matrix(c(CLASS, 3-CLASS), ncol = 2) ~ AREA_SQKM_log10 + GRADIENT, 
+  matrix(c(CLASS, 3-CLASS), ncol = 2) ~ log10(AREA_SQKM) + GRADIENT, 
                    family = "binomial",
                    ssn,  
                    taildown_type = "exponential",
@@ -170,14 +170,14 @@ ssn_mod_binom <- ssn_glm(
 
 ```
 
-```{r}
+```{r ssn-summary}
 summary(ssn_mod_binom)
 ```
 
 Parameter estimates are pretty different between the spatial and non-spatial binomial models. 
 Let's look at fitted values. 
 
-```{r}
+```{r validate-ssn}
 # for some reason they get transformed to be between 0 and 3 
 # when you say type = "response"
 p_fitted_ssn <- plogis(fitted(ssn_mod_binom, type = "link"))
