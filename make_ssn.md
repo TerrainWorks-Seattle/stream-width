@@ -1,15 +1,18 @@
----
-title: "Make SSN object"
-output: github_document
-date: "2025-05-02"
----
+Make SSN object
+================
+2025-05-02
 
-In this notebook, I read in the nodes shapefile, do some data cleaning, and 
-save it as a .ssn object which can be used to fit spatial stream models using 
-the SSN2 R package. 
+In this notebook, I read in the nodes shapefile, do some data cleaning,
+and save it as a .ssn object which can be used to fit spatial stream
+models using the SSN2 R package.
 
-```{r setup}
+``` r
 library(sf)
+```
+
+    ## Linking to GEOS 3.9.3, GDAL 3.5.2, PROJ 8.2.1; sf_use_s2() is TRUE
+
+``` r
 library(sfnetworks)
 library(SSN2)
 library(ggplot2)
@@ -34,21 +37,24 @@ st_crs(nodes) <- st_crs(reaches)
 nodes_matched <- st_join(nodes, reaches[c("REACH_ID")], all.x = TRUE, all.y = FALSE, join = st_nearest_feature)
 ```
 
-Now, do a bit of clean up. We need to make sure that all topology is valid, meaning that 
-all intersections between stream lines follow one of the categories shown in the 
-image below: 
+Now, do a bit of clean up. We need to make sure that all topology is
+valid, meaning that all intersections between stream lines follow one of
+the categories shown in the image below:
 
-```{r valid-nodes}
+``` r
 knitr::include_graphics("ssn_files/valid_nodes.png")
 ```
 
-Invalid topology and suggestions on how to fix it are described in the [topology 
-editing tutorial](https://github.com/pet221/SSNbler/blob/main/inst/tutorials/Topology_Editing/QGIS/TopologyEditing_QGIS.pdf). 
+![](ssn_files/valid_nodes.png)<!-- -->
 
-To identify node types, we create an adjacency matrix. The following code chunk 
-chunk edits some node connections using the adjacency matrix. 
+Invalid topology and suggestions on how to fix it are described in the
+[topology editing
+tutorial](https://github.com/pet221/SSNbler/blob/main/inst/tutorials/Topology_Editing/QGIS/TopologyEditing_QGIS.pdf).
 
-```{r prep_topology}
+To identify node types, we create an adjacency matrix. The following
+code chunk chunk edits some node connections using the adjacency matrix.
+
+``` r
 # Create adjacency matrix
 # first need to index nodes from 1:n
 
@@ -127,18 +133,16 @@ for (c in converging) {
 }
 
 A <- make_A(n, N)
- 
 ```
 
-Now we should have an adjacency matrix describing valid topology between all nodes. 
-Next, we create a network which only includes links between confluences. This is 
-the minimum needed to describe the topology of the network. Info from nodes within 
-these links can be added later to aid in model fitting and predictions. 
-This can take a long time for a large number of nodes so we will do some longer 
-operations in parallel. 
+Now we should have an adjacency matrix describing valid topology between
+all nodes. Next, we create a network which only includes links between
+confluences. This is the minimum needed to describe the topology of the
+network. Info from nodes within these links can be added later to aid in
+model fitting and predictions. This can take a long time for a large
+number of nodes so we will do some longer operations in parallel.
 
-```{r make_edges}
-
+``` r
 # create new data tables which will hold info for reduced network
 
 # start with only sources, outlets, and confluences
@@ -169,7 +173,41 @@ cl <- makeCluster(n_cores)
 clusterEvalQ(cl, {
   library(data.table)
 })
+```
 
+    ## [[1]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[2]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[3]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[4]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[5]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[6]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[7]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"      
+    ## 
+    ## [[8]]
+    ## [1] "data.table" "stats"      "graphics"   "grDevices"  "utils"     
+    ## [6] "datasets"   "methods"    "base"
+
+``` r
 # recursive function to get all nodes (in order) from one confluence to the 
 # next downstream one. 
 get_downstream <- function(id, i = 1, n_list = id) {
@@ -202,7 +240,41 @@ clusterExport(cl, "n_sf")
 clusterEvalQ(cl, {
   library(sf)
 })
+```
 
+    ## [[1]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[2]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[3]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[4]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[5]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[6]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[7]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"      
+    ## 
+    ## [[8]]
+    ## [1] "sf"         "data.table" "stats"      "graphics"   "grDevices" 
+    ## [6] "utils"      "datasets"   "methods"    "base"
+
+``` r
 geometryList <- parLapply(cl, sets, \(s) {st_linestring(st_coordinates(n_sf)[s$n_list, ])}) 
 
 new_e$geometry <- st_as_sfc(geometryList)
@@ -229,11 +301,12 @@ new_e$center_nodenum <- n[.(unlist(lapply(sets, \(s) s$n_list[round(s$i/2)]))), 
 stopCluster(cl)
 ```
 
-We are almost ready to create the .ssn object! But first, we must choose our 
-observation and prediction points. Each survey reach will correspond to one 
-observation. We will use the center point of the reach as the observation location. 
+We are almost ready to create the .ssn object! But first, we must choose
+our observation and prediction points. Each survey reach will correspond
+to one observation. We will use the center point of the reach as the
+observation location.
 
-```{r make_obs}
+``` r
 # set observation points as center point from each reach
 # https://gis.stackexchange.com/questions/254151/how-to-find-the-center-point-which-lies-on-the-linestring-geometry 
 reach_obs <- reaches[!is.na(reaches$CLASS), ]
@@ -241,11 +314,10 @@ reach_obs <- reaches[!is.na(reaches$CLASS), ]
 reach_obs$geometry <- st_line_interpolate(st_geometry(reach_obs), 0.5, normalized = TRUE)
 ```
 
-We will predict at each edge (link) that is greater than 2 nodes long. 
-Prediction points will be at the center of the edge. 
+We will predict at each edge (link) that is greater than 2 nodes long.
+Prediction points will be at the center of the edge.
 
-```{r make_preds}
-
+``` r
 # predict at center(ish) node for each edge. 
 # No predictions for edges only one node length long
 setkey(n, NodeNum)
@@ -253,9 +325,10 @@ new_e$node_count <- unlist(lapply(sets, \(s) s$i))
 pred_points <- st_as_sf(n[.(new_e[new_e$node_count > 2, ]$center_nodenum)])
 ```
 
-We have all the pieces we need. Now, use SSNbler to create the ssn object. 
+We have all the pieces we need. Now, use SSNbler to create the ssn
+object.
 
-```{r lines_to_lsn}
+``` r
 library(SSN2)
 library(SSNbler)
 lsn.path <- file.path("data/ssn_files_keep", "lsn")
@@ -274,7 +347,18 @@ edges <- lines_to_lsn(
 )
 ```
 
-```{r sites_to_lsn}
+    ## 
+    ## Saved data/ssn_files_keep/lsn/edges.gpkg
+
+    ## Building Edge Relationships ...
+
+    ## Saving data/ssn_files_keep/lsn/nodes.gpkg
+
+    ## Building relationship tables....
+
+    ## LSN created. Topology not checked.
+
+``` r
 obs <- sites_to_lsn(
   sites = st_as_sf(as.data.frame(reach_obs), crs = st_crs(reach_obs)),
   edges = edges,
@@ -286,7 +370,20 @@ obs <- sites_to_lsn(
 )
 ```
 
-```{r preds_to_lsn}
+    ## 
+    ## Finding locations on nearest edge segments
+
+    ## Snapping points to edges
+
+    ## Calculating ratio values
+
+    ## Saving snapped sites data/ssn_files_keep/lsn/obs.gpkg
+
+    ## FINISHED sites_to_lsn script successfully
+
+    ## Snapped 3287 out of 3287 sites to LSN
+
+``` r
 preds <- sites_to_lsn(
   sites = st_as_sf(as.data.frame(pred_points), crs = st_crs(pred_points)),
   edges = edges,
@@ -298,8 +395,20 @@ preds <- sites_to_lsn(
 )
 ```
 
-```{r updist_edges}
+    ## 
+    ## Finding locations on nearest edge segments
 
+    ## Snapping points to edges
+
+    ## Calculating ratio values
+
+    ## Saving snapped sites data/ssn_files_keep/lsn/pred.gpkg
+
+    ## FINISHED sites_to_lsn script successfully
+
+    ## Snapped 27298 out of 27298 sites to LSN
+
+``` r
 edges <- updist_edges(
   edges = edges,
   save_local = TRUE,
@@ -308,7 +417,22 @@ edges <- updist_edges(
 )
 ```
 
-```{r updist_sites}
+    ## 
+    ## 
+    ## Importing relationships.csv table
+
+    ## 
+    ## Identifying outlet segments
+
+    ## Linking edge networks and outlets
+
+    ## Calculating upstream distance
+
+    ## Saving updated edges in data/ssn_files_keep/lsn
+
+    ## FINISHED updist_edges successfully
+
+``` r
 site.list <- updist_sites(
   sites = list(
     obs = obs,
@@ -321,7 +445,7 @@ site.list <- updist_sites(
 )
 ```
 
-```{r afv_edges}
+``` r
 edges <- afv_edges(
   edges = edges,
   infl_col = "area_weight",
@@ -331,7 +455,7 @@ edges <- afv_edges(
 )
 ```
 
-```{r afv_sites}
+``` r
 site.list <- afv_sites(
   sites = site.list,
   edges = edges,
@@ -341,7 +465,7 @@ site.list <- afv_sites(
 )
 ```
 
-```{ssn_assemble}
+``` ssn_assemble
 # ensure no obs ratio < 0 or > 1
 site.list$obs$ratio <- ifelse(site.list$obs$ratio < 0, 0, site.list$obs$ratio)
 
@@ -356,5 +480,4 @@ reaches_ssn <- ssn_assemble(
   afv_col = "afvArea",
   overwrite = TRUE
 )
-
 ```
