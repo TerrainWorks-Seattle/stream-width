@@ -9,6 +9,8 @@ format:
     code-fold: true
     code-tools: true
     embed-resources: true
+  pdf: default
+  docx: default
 editor: visual
 editor_options: 
   chunk_output_type: inline
@@ -732,13 +734,13 @@ n5 <- tm1[Reference==5, sum(N)]
 tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
 ```
 
-| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
-|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
-| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
-| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
-| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
-| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
-| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+| Prediction | Ephemeral | Intermittent | Transitional | Small Permanent | Large Permanent |
+|:-----------|:----------:|:----------:|:----------:|:----------:|:----------:|
+| Ephemeral | `r tmp[1,4]` | `r tmp[6,4]` | `r tmp[11,4]` | `r tmp[16,4]` | `r tmp[21,4]` |
+| Intermittent | `r tmp[2,4]` | `r tmp[7,4]` | `r tmp[12,4]` | `r tmp[17,4]` | `r tmp[22,4]` |
+| Transitional | `r tmp[3,4]` | `r tmp[8,4]` | `r tmp[13,4]` | `r tmp[18,4]` | `r tmp[23,4]` |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]` | `r tmp[14,4]` | `r tmp[19,4]` | `r tmp[24,4]` |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` | `r tmp[20,4]` | `r tmp[25,4]` |
 
 : Confusion matrix by proportion of each class, model 1 (Area).
 
@@ -763,13 +765,13 @@ n5 <- tm1[Reference==5, sum(N)]
 tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
 ```
 
-| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
-|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
-| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
-| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
-| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
-| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
-| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+| Prediction | Ephemeral | Intermittent | Transitional | Small Permanent | Large Permanent |
+|:-----------|:----------:|:----------:|:----------:|:----------:|:----------:|
+| Ephemeral | `r tmp[1,4]` | `r tmp[6,4]` | `r tmp[11,4]` | `r tmp[16,4]` | `r tmp[21,4]` |
+| Intermittent | `r tmp[2,4]` | `r tmp[7,4]` | `r tmp[12,4]` | `r tmp[17,4]` | `r tmp[22,4]` |
+| Transitional | `r tmp[3,4]` | `r tmp[8,4]` | `r tmp[13,4]` | `r tmp[18,4]` | `r tmp[23,4]` |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]` | `r tmp[14,4]` | `r tmp[19,4]` | `r tmp[24,4]` |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` | `r tmp[20,4]` | `r tmp[25,4]` |
 
 : Confusion matrix by proportion of each class, model 1 (Area).
 
@@ -848,13 +850,13 @@ n5 <- tm1[Reference==5, sum(N)]
 tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
 ```
 
-| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
-|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
-| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
-| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
-| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
-| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
-| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+| Prediction | Ephemeral | Intermittent | Transitional | Small Permanent | Large Permanent |
+|:-----------|:----------:|:----------:|:----------:|:----------:|:----------:|
+| Ephemeral | `r tmp[1,4]` | `r tmp[6,4]` | `r tmp[11,4]` | `r tmp[16,4]` | `r tmp[21,4]` |
+| Intermittent | `r tmp[2,4]` | `r tmp[7,4]` | `r tmp[12,4]` | `r tmp[17,4]` | `r tmp[22,4]` |
+| Transitional | `r tmp[3,4]` | `r tmp[8,4]` | `r tmp[13,4]` | `r tmp[18,4]` | `r tmp[23,4]` |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]` | `r tmp[14,4]` | `r tmp[19,4]` | `r tmp[24,4]` |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` | `r tmp[20,4]` | `r tmp[25,4]` |
 
 : Confusion matrix by proportion of each class, model 1 using cut points.
 
@@ -879,12 +881,12 @@ n5 <- tm1[Reference==5, sum(N)]
 tmp <- tm1[, P := (fifelse(Reference==1, N/n1, fifelse(Reference==2, N/n2, fifelse(Reference==3, N/n3, ifelse(Reference==4, N/n4, ifelse(Reference==5, N/n5, 0))))))]
 ```
 
-| Prediction      |  Ephemeral   | Intermittent  | Transitional  | Small Permanent | Large Permanent |
-|:----------------|:------------:|:-------------:|:-------------:|:---------------:|:---------------:|
-| Ephemeral       | `r tmp[1,4]` | `r tmp[6,4]`  | `r tmp[11,4]` |  `r tmp[16,4]`  |  `r tmp[21,4]`  |
-| Intermittent    | `r tmp[2,4]` | `r tmp[7,4]`  | `r tmp[12,4]` |  `r tmp[17,4]`  |  `r tmp[22,4]`  |
-| Transitional    | `r tmp[3,4]` | `r tmp[8,4]`  | `r tmp[13,4]` |  `r tmp[18,4]`  |  `r tmp[23,4]`  |
-| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]`  | `r tmp[14,4]` |  `r tmp[19,4]`  |  `r tmp[24,4]`  |
-| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` |  `r tmp[20,4]`  |  `r tmp[25,4]`  |
+| Prediction | Ephemeral | Intermittent | Transitional | Small Permanent | Large Permanent |
+|:-----------|:----------:|:----------:|:----------:|:----------:|:----------:|
+| Ephemeral | `r tmp[1,4]` | `r tmp[6,4]` | `r tmp[11,4]` | `r tmp[16,4]` | `r tmp[21,4]` |
+| Intermittent | `r tmp[2,4]` | `r tmp[7,4]` | `r tmp[12,4]` | `r tmp[17,4]` | `r tmp[22,4]` |
+| Transitional | `r tmp[3,4]` | `r tmp[8,4]` | `r tmp[13,4]` | `r tmp[18,4]` | `r tmp[23,4]` |
+| Small Permanent | `r tmp[4,4]` | `r tmp[9,4]` | `r tmp[14,4]` | `r tmp[19,4]` | `r tmp[24,4]` |
+| Large Permanent | `r tmp[5,4]` | `r tmp[10,4]` | `r tmp[15,4]` | `r tmp[20,4]` | `r tmp[25,4]` |
 
 : Confusion matrix by proportion of each class, model 1 trained on Area C, applied to Spray Lake.
